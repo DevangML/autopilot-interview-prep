@@ -1,0 +1,11 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import InterviewPrepApp from './InterviewPrepApp.jsx'
+
+createRoot(document.getElementById('interview-prep-root')).render(
+  <StrictMode>
+    <InterviewPrepApp />
+  </StrictMode>,
+)
+

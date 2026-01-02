@@ -1,0 +1,29 @@
+TARGETED FIXES SUMMARY
+
+Domain Mode Implementation
+- Added domain mode as first-class concept: LEARNING (default), REVISION, POLISH
+- Difficulty prioritization branches first by domain mode, then by domain type
+- All existing difficulty logic preserved and extended, not replaced
+- LEARNING: Fundamentals hard-first with failure backoff, Coding readiness-based
+- REVISION: Prioritizes overdue items and recently failed attempts (attempt-derived, not time-based)
+- POLISH: Prioritizes recall, refinement, and confidence-building
+- Files: src/core/domainMode.js (new), src/core/difficulty.js (restructured)
+
+Fundamentals Failure Backoff
+- Strictly attempt-based: tracks failure streak from attempts data only
+- Increments on failed attempts (Stuck/Skipped), resets to 0 on Solved/Partial
+- Computes effectiveDifficulty = baseDifficulty - min(1.5, failureStreak * 0.5)
+- Fundamentals sorted exclusively by effectiveDifficulty (no time-based logic)
+- Files: src/core/difficulty.js, src/hooks/useAttempts.js
+
+Pattern-Level Readiness for Coding
+- Aggregates readiness across items sharing same pattern when metadata exists
+- Uses pattern readiness when available, falls back to item-level readiness
+- Attempts recorded at item level only
+- Files: src/hooks/useAttempts.js, src/core/sessionOrchestrator.js
+
+Preserved Invariants
+- Zero-trust mutation rules unchanged
+- Session composition remains exactly 3 units
+- Coverage debt formula unchanged
+- No new UI screens, settings, or flows added

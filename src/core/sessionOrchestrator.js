@@ -7,6 +7,7 @@ import { classifyDomain, getDomainsByType, DOMAIN_TYPES } from './domains.js';
 import { calculateCoverageDebt, getDefaultWeeklyFloor } from './coverage.js';
 import { prioritizeByDifficulty } from './difficulty.js';
 import { getUnitTypesForDomain, UNIT_TYPES } from './units.js';
+import { getDefaultDomainMode } from './domainMode.js';
 import { fetchDatabaseItems } from '../services/notion.js';
 
 // Note: This is a placeholder - in production, you'd load attempts from the attempts database
@@ -87,15 +88,53 @@ export const orchestrateSession = async ({
 
   const coreCandidates = allItems
     .filter(item => item.domainType === coreDomainType && !item.properties?.Completed?.checkbox)
-    .map(item => ({
-      ...item,
-      difficulty: item.properties?.['CPRD: Difficulty']?.select?.name || '3'
-    }));
+    .map(item => {
+      const diffStr = item.properties?.['CPRD: Difficulty']?.select?.name || '3';
+      const difficulty = typeof diffStr === 'string' ? parseInt(diffStr, 10) : (diffStr || 3);
+      return {
+        ...item,
+        difficulty: isNaN(difficulty) ? 3 : difficulty
+      };
+    });
+
+  // Get domain mode (default LEARNING for now)
+  const domainMode = getDefaultDomainMode();
+  
+  // Prepare readiness data - support both old and new structure
+  let readinessData = {};
+  let attemptsDataForPrioritization = {};
+  
+  if (attemptsData.itemData) {
+    // New structure from getAttemptsData()
+    attemptsDataForPrioritization = attemptsData.itemData;
+    readinessData = attemptsData.itemReadinessMap || {};
+    
+    // For coding domains, use pattern-level readiness if available
+    if (coreDomainType === DOMAIN_TYPES.CODING && attemptsData.getPatternReadiness) {
+      coreCandidates.forEach(item => {
+        const pattern = item.properties?.['Primary Pattern']?.rich_text?.[0]?.plain_text ||
+                       item.properties?.['Pattern']?.rich_text?.[0]?.plain_text;
+        if (pattern) {
+          const patternReadiness = attemptsData.getPatternReadiness(pattern);
+          if (patternReadiness) {
+            // Use pattern readiness for this item
+            readinessData[item.id] = patternReadiness;
+          }
+        }
+      });
+    }
+  } else {
+    // Legacy structure
+    readinessData = attemptsData.readiness || {};
+    attemptsDataForPrioritization = {};
+  }
 
   const prioritizedCore = prioritizeByDifficulty(
     coreCandidates,
     coreDomainType,
-    attemptsData.readiness || {}
+    readinessData,
+    domainMode,
+    attemptsDataForPrioritization
   );
 
   const coreUnit = prioritizedCore.length > 0 ? {
