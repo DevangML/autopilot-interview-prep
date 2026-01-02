@@ -221,11 +221,10 @@ This is an **Autopilot Interview Preparation Platform** built as a Chrome extens
 
 ## Architecture Documents
 
-- `docs/ARCHITECTURE.md` - High-level architecture overview
+- `ARCHITECTURE.md` - High-level architecture overview (project root)
 - `docs/IMPLEMENTATION.md` - Detailed implementation guide
 - `docs/MULTI_DATABASE_SOLUTION.md` - Database discovery solution
-- `docs/FIXES_SUMMARY_FINAL.txt` - Final hardening summary
-- `docs/FINAL_TWEAKS_SUMMARY.txt` - Latest tweaks summary
+- `docs/reports/` - Implementation and hardening reports
 
 ---
 

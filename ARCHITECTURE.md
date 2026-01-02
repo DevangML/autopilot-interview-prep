@@ -1,5 +1,7 @@
 # Architecture Overview
 
+> **For AI agents**: See [AGENTS.md](../AGENTS.md) for architecture rules and invariants.
+
 ## Design Principles
 
 This codebase follows **DRY, KISS, and SOLID** principles with a focus on:
