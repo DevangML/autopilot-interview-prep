@@ -13,6 +13,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
+        'interview-prep': resolve(__dirname, 'interview-prep.html'),
         content: resolve(__dirname, 'src/content.js'),
         background: resolve(__dirname, 'src/background.js'),
       },

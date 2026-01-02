@@ -280,16 +280,13 @@ function ExtensionApp() {
   };
 
   const openInterviewPrep = () => {
-    if (typeof chrome !== 'undefined' && chrome.windows) {
-      chrome.windows.create({
-        url: chrome.runtime.getURL('interview-prep.html'),
-        type: 'popup',
-        width: 420,
-        height: 600
+    if (typeof chrome !== 'undefined' && chrome.tabs) {
+      chrome.tabs.create({
+        url: chrome.runtime.getURL('interview-prep.html')
       });
     } else {
       // Fallback for development
-      window.open('/interview-prep.html', '_blank', 'width=420,height=600');
+      window.open('/interview-prep.html', '_blank');
     }
   };
 
@@ -343,7 +340,7 @@ function ExtensionApp() {
       <div className="blob blob-secondary bg-cyan-600/20 w-[300px] h-[300px] rounded-full -bottom-12 -right-24" />
 
       {pendingUpdate && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4">
+        <div className="flex absolute inset-0 z-20 justify-center items-center p-4 bg-black/70">
           <DataUpdateConfirmation
             plan={pendingUpdate.plan}
             onConfirm={confirmPendingUpdate}
@@ -373,10 +370,11 @@ function ExtensionApp() {
           <div className="flex gap-2 items-center">
             <button
               onClick={openInterviewPrep}
-              className="p-2.5 rounded-lg hover:bg-white/5 group"
+              className="flex gap-2 items-center px-3 py-2 rounded-lg transition-colors hover:bg-white/5 group"
               title="Open Interview Prep Platform"
             >
-              <Trophy className="w-5 h-5 text-gray-500 transition-colors group-hover:text-purple-400" />
+              <Trophy className="w-4 h-4 text-gray-500 transition-colors group-hover:text-purple-400" />
+              <span className="text-xs font-medium text-gray-400 transition-colors group-hover:text-purple-400">Interview Prep</span>
             </button>
             <button onClick={() => setShowSettings(true)} className="p-2.5 rounded-lg hover:bg-white/5">
               <Settings className="w-5 h-5 text-gray-500 hover:text-blue-400" />
