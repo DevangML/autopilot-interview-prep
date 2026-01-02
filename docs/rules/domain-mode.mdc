@@ -1,0 +1,98 @@
+# Domain Mode System Rules
+
+## Core Principle
+
+**Domain mode is independent of domain type and branches first in prioritization.**
+
+Domain mode determines learning phase behavior, not just domain classification.
+
+## Must (Domain Mode Definition)
+
+### Three Modes
+
+- **LEARNING**: Default mode for new content
+- **REVISION**: Review and reinforcement phase
+- **POLISH**: Confidence-building and refinement phase
+
+### Mode Independence
+
+- Domain mode is independent of domain base type
+- Default mode is LEARNING (no UI for switching)
+- Mode may be inferred later, but default is sufficient for now
+
+## Must (Prioritization Order)
+
+### Branch First by Mode, Then by Type
+
+- Difficulty prioritization branches by domain mode FIRST
+- Then branches by domain type (FUNDAMENTALS, CODING, INTERVIEW, SPICE)
+- All existing difficulty logic preserved and extended
+
+### LEARNING Mode Behavior
+
+- **Fundamentals**: Hard-first with attempt-based failure backoff
+- **Coding**: Readiness-based selection (existing logic preserved)
+
+### REVISION Mode Behavior
+
+- Prioritize overdue items and recently failed attempts
+- Attempt-derived, not time-based
+- Applies across all domain types
+
+### POLISH Mode Behavior
+
+- Prioritize recall, refinement, and confidence-building
+- Lower confidence items get higher priority
+- Applies across all domain types
+
+## Must (Failure Backoff)
+
+### Attempt-Based Only
+
+- Track failure streak from attempts data
+- Increment on failed attempts (Stuck/Skipped)
+- Reset to 0 on Solved or Partial
+- Compute effectiveDifficulty for Fundamentals
+- No time-based logic
+
+## Must (Preserve Existing Logic)
+
+### Extend, Don't Replace
+
+- All existing difficulty behavior preserved
+- New mode logic wraps or extends existing behavior
+- No removal of prior functionality
+
+## Examples
+
+### ✅ CORRECT: Mode-First Branching
+
+```javascript
+if (mode === DOMAIN_MODES.LEARNING) {
+  if (domainType === DOMAIN_TYPES.FUNDAMENTALS) {
+    // Hard-first with failure backoff
+  } else if (domainType === DOMAIN_TYPES.CODING) {
+    // Readiness-based
+  }
+} else if (mode === DOMAIN_MODES.REVISION) {
+  // Prioritize overdue and recently failed
+}
+```
+
+### ❌ WRONG: Type-First Branching
+
+```javascript
+// NEVER do this
+if (domainType === DOMAIN_TYPES.FUNDAMENTALS) {
+  if (mode === DOMAIN_MODES.LEARNING) {
+    // Wrong order!
+  }
+}
+```
+
+## When to Apply
+
+- **Any time you modify difficulty prioritization**
+- **Any time you add new domain modes**
+- **Any time you change failure backoff logic**
+- **Any time you modify session composition**

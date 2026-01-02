@@ -12,7 +12,8 @@ import { WorkUnit } from './components/WorkUnit.jsx';
 import { UpgradeFlow } from './components/UpgradeFlow.jsx';
 import { orchestrateSession } from './core/sessionOrchestrator.js';
 import { generateContent } from './services/gemini.js';
-import { getDatabaseMapping } from './services/notionDiscovery.js';
+import { getDatabaseMapping, prepareDatabaseMapping } from './services/notionDiscovery.js';
+import { DatabaseMappingConfirmation } from './components/DatabaseMappingConfirmation.jsx';
 
 function InterviewPrepApp() {
   const { config, isLoading: configLoading, isConfigured, updateConfig } = useConfig();
@@ -23,17 +24,46 @@ function InterviewPrepApp() {
   const [error, setError] = useState(null);
   const [databaseMapping, setDatabaseMapping] = useState(null);
   const [discoveryData, setDiscoveryData] = useState(null);
+  const [mappingProposal, setMappingProposal] = useState(null);
+  const [showMappingConfirmation, setShowMappingConfirmation] = useState(false);
 
-  // Load database mapping on config change
+  // Load database mapping proposal on config change
   useEffect(() => {
     if (config.notionKey && !databaseMapping) {
-      getDatabaseMapping(config.notionKey)
-        .then(({ mapping, attemptsDatabaseId, discovery }) => {
-          setDatabaseMapping(mapping);
+      // Get previous fingerprints from storage
+      const previousFingerprints = JSON.parse(
+        localStorage.getItem('notionSchemaFingerprints') || '{}'
+      );
+      
+      prepareDatabaseMapping(config.notionKey, previousFingerprints)
+        .then(({ proposal, discovery }) => {
           setDiscoveryData(discovery);
-          // Store attempts database ID in config
-          if (attemptsDatabaseId && !config.attemptsDatabaseId) {
-            updateConfig({ attemptsDatabaseId });
+          
+          // Block session orchestration if fingerprint changed (mandatory re-analysis)
+          if (proposal.fingerprintChanged) {
+            setMappingProposal(proposal);
+            setShowMappingConfirmation(true);
+            setError('Schema fingerprint changed. Re-confirmation required.');
+            return;
+          }
+          
+          // Check if confirmation required
+          const hasWarnings = Object.keys(proposal.warnings).length > 0;
+          const hasBlocks = proposal.blocks.length > 0;
+          
+          if (hasWarnings || hasBlocks) {
+            setMappingProposal(proposal);
+            setShowMappingConfirmation(true);
+          } else {
+            // Auto-accept high confidence mappings
+            setDatabaseMapping(proposal.autoAccept);
+            if (proposal.attemptsDatabase) {
+              updateConfig({ attemptsDatabaseId: proposal.attemptsDatabase.id });
+              // Store fingerprint for change detection
+              const fingerprints = { ...previousFingerprints };
+              fingerprints[proposal.attemptsDatabase.id] = proposal.attemptsDatabase.schemaFingerprint;
+              localStorage.setItem('notionSchemaFingerprints', JSON.stringify(fingerprints));
+            }
           }
         })
         .catch(err => {
@@ -96,6 +126,61 @@ function InterviewPrepApp() {
   const geminiService = {
     generateContent: (prompt, options) => generateContent(config.geminiKey, prompt, options)
   };
+
+  // Database mapping confirmation view
+  if (showMappingConfirmation && mappingProposal) {
+    return (
+      <div className="w-full h-full bg-[#0B0F19] text-white flex flex-col rounded-2xl relative overflow-hidden">
+        <div className="flex relative z-10 flex-col px-5 py-6 h-full">
+          <div className="flex gap-4 items-center mb-6">
+            <button
+              onClick={() => {
+                setShowMappingConfirmation(false);
+                setMappingProposal(null);
+              }}
+              className="p-2 rounded-lg hover:bg-white/5"
+            >
+              <X className="w-5 h-5 text-gray-400" />
+            </button>
+            <div>
+              <h2 className="text-lg font-semibold">Database Mapping</h2>
+              <p className="mt-0.5 text-xs text-gray-500">Review and confirm database mappings</p>
+            </div>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            <DatabaseMappingConfirmation
+              proposal={mappingProposal}
+              onConfirm={() => {
+                // Accept auto-accepted + first warning DB per domain
+                const confirmed = { ...mappingProposal.autoAccept };
+                Object.entries(mappingProposal.warnings).forEach(([domain, dbs]) => {
+                  confirmed[domain] = [dbs[0].id]; // Take first DB from warnings
+                });
+                setDatabaseMapping(confirmed);
+                if (mappingProposal.attemptsDatabase) {
+                  updateConfig({ attemptsDatabaseId: mappingProposal.attemptsDatabase.id });
+                  // Store fingerprint for change detection
+                  const previousFingerprints = JSON.parse(
+                    localStorage.getItem('notionSchemaFingerprints') || '{}'
+                  );
+                  previousFingerprints[mappingProposal.attemptsDatabase.id] = 
+                    mappingProposal.attemptsDatabase.schemaFingerprint;
+                  localStorage.setItem('notionSchemaFingerprints', JSON.stringify(previousFingerprints));
+                }
+                setShowMappingConfirmation(false);
+                setMappingProposal(null);
+                setError(null);
+              }}
+              onCancel={() => {
+                setShowMappingConfirmation(false);
+                setMappingProposal(null);
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Settings view
   if (showSettings) {

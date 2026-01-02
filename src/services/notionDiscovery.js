@@ -1,10 +1,45 @@
 /**
  * Notion Database Discovery Service
- * Automatically discovers and classifies databases from Notion API
- * Uses .env for API key only - no hardcoded database IDs
+ * Discovers and classifies databases with validation gates
+ * Treats discovery as proposal, not decision - requires confirmation for uncertain cases
  */
 
 const NOTION_API_VERSION = '2022-06-28';
+
+/**
+ * Confidence thresholds (actionable, not informational)
+ */
+const CONFIDENCE_THRESHOLDS = {
+  AUTO_ACCEPT: 0.7,  // ≥ 0.7 → auto-accept
+  WARN: 0.4,         // 0.4-0.7 → warn + require confirmation
+  BLOCK: 0.4         // < 0.4 → block auto-mapping
+};
+
+/**
+ * Generates schema fingerprint for a database
+ * Includes property IDs + types + CPRD presence (order-independent)
+ */
+const generateSchemaFingerprint = (database) => {
+  const properties = database.properties || {};
+  const propSignature = Object.entries(properties)
+    .map(([name, prop]) => {
+      const propId = prop.id || name; // Use property ID if available
+      const type = prop.type || 'unknown';
+      const hasCPRD = name.startsWith('CPRD:');
+      return `${propId}:${type}:${hasCPRD}`;
+    })
+    .sort() // Order-independent
+    .join('|');
+  
+  // Simple hash (for fingerprinting, not security)
+  let hash = 0;
+  for (let i = 0; i < propSignature.length; i++) {
+    const char = propSignature.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash.toString(36);
+};
 
 /**
  * Searches all databases accessible to the API key
@@ -38,7 +73,28 @@ export const searchAllDatabases = async (apiKey) => {
 };
 
 /**
+ * Domain-typical properties mapping
+ * Properties that strongly indicate a domain
+ */
+const DOMAIN_TYPICAL_PROPERTIES = {
+  'DSA': ['Difficulty', 'Pattern', 'Topic', 'LeetCode Link', 'CPRD: Difficulty'],
+  'OOP': ['Principles', 'Concepts', 'Examples', 'CPRD: Concepts'],
+  'OS': ['Concepts', 'Processes', 'Memory', 'CPRD: Concepts'],
+  'DBMS': ['SQL', 'Queries', 'Normalization', 'CPRD: Concepts'],
+  'CN': ['Protocols', 'Layers', 'TCP/IP', 'CPRD: Concepts'],
+  'Behavioral': ['STAR', 'Situation', 'Action', 'Result', 'CPRD: Story'],
+  'HR': ['Question', 'Answer', 'CPRD: Story'],
+  'OA': ['Difficulty', 'Company', 'CPRD: Difficulty'],
+  'Phone Screen': ['Question', 'Answer', 'CPRD: Q&A'],
+  'Aptitude': ['Type', 'Difficulty', 'CPRD: Difficulty'],
+  'Puzzles': ['Type', 'Difficulty', 'CPRD: Difficulty'],
+  'LLD': ['Design', 'Classes', 'Relationships', 'CPRD: Design'],
+  'HLD': ['System', 'Components', 'Scalability', 'CPRD: Design']
+};
+
+/**
  * Classifies a database by analyzing its properties and title
+ * Uses schema-based signals to improve confidence and reduce ambiguity
  * @param {Object} database - Notion database object
  * @returns {Object} Classification result
  */
@@ -46,6 +102,7 @@ export const classifyDatabase = (database) => {
   const title = database.title?.[0]?.plain_text || '';
   const titleLower = title.toLowerCase();
   const properties = database.properties || {};
+  const propertyNames = Object.keys(properties);
   
   // Domain keywords mapping
   const domainKeywords = {
@@ -64,19 +121,66 @@ export const classifyDatabase = (database) => {
     'HLD': ['hld', 'high level design', 'system design']
   };
 
-  // Check title for domain match
+  // Check title for domain match (title-only confidence capped at medium)
   let matchedDomain = null;
-  let confidence = 0;
+  let titleConfidence = 0;
 
   for (const [domain, keywords] of Object.entries(domainKeywords)) {
     const matchCount = keywords.filter(kw => titleLower.includes(kw)).length;
     if (matchCount > 0) {
       const domainConfidence = matchCount / keywords.length;
-      if (domainConfidence > confidence) {
-        confidence = domainConfidence;
+      if (domainConfidence > titleConfidence) {
+        titleConfidence = domainConfidence;
         matchedDomain = domain;
       }
     }
+  }
+
+  // Cap title-only confidence at medium (0.5)
+  if (titleConfidence > 0.5) {
+    titleConfidence = 0.5;
+  }
+
+  // Schema-based confidence boosts
+  let schemaConfidence = 0;
+  let hasCPRD = false;
+  let hasDomainTypicalProps = false;
+
+  // Check for CPRD columns (strong signal)
+  const cprdProps = propertyNames.filter(name => name.startsWith('CPRD:'));
+  if (cprdProps.length > 0) {
+    hasCPRD = true;
+    schemaConfidence += 0.3; // Strong boost for CPRD presence
+  }
+
+  // Check for domain-typical properties
+  if (matchedDomain && DOMAIN_TYPICAL_PROPERTIES[matchedDomain]) {
+    const typicalProps = DOMAIN_TYPICAL_PROPERTIES[matchedDomain];
+    const matchingProps = typicalProps.filter(prop => propertyNames.includes(prop));
+    if (matchingProps.length > 0) {
+      hasDomainTypicalProps = true;
+      schemaConfidence += 0.2 * (matchingProps.length / typicalProps.length); // Proportional boost
+    }
+  }
+
+  // Final confidence: title + schema signals
+  // For ambiguous names, schema signals dominate
+  const isAmbiguous = titleLower.includes('interview') || titleLower.includes('prep') || 
+                      titleLower.includes('notes') || titleLower.includes('systems');
+  
+  let finalConfidence;
+  if (isAmbiguous && schemaConfidence > 0) {
+    // Ambiguous names: rely more on schema
+    finalConfidence = Math.min(0.9, titleConfidence * 0.3 + schemaConfidence * 0.7);
+  } else {
+    // Normal: combine title and schema
+    finalConfidence = Math.min(0.9, titleConfidence + schemaConfidence);
+  }
+  
+  // Confidence floor: when multiple strong schema signals align
+  // CPRD + domain-typical props + learning-sheet structure → minimum 0.6
+  if (hasCPRD && hasDomainTypicalProps && isLearningSheet) {
+    finalConfidence = Math.max(0.6, finalConfidence);
   }
 
   // Analyze properties to determine if it's a learning sheet
@@ -86,22 +190,28 @@ export const classifyDatabase = (database) => {
   
   const isLearningSheet = hasNameProperty && (hasCompletedProperty || hasLinkProperty);
 
-  // Check if it's an attempts database
+  // Harden attempts database detection - schema signature only
+  // Must have ALL three: Item (relation), Result (select), Time Spent (number)
   const hasItemRelation = 'Item' in properties && properties.Item?.type === 'relation';
   const hasResultSelect = 'Result' in properties && properties.Result?.type === 'select';
-  const hasTimeSpent = 'Time Spent' in properties || 'Time Spent (min)' in properties;
+  const hasTimeSpent = ('Time Spent' in properties && properties['Time Spent']?.type === 'number') ||
+                       ('Time Spent (min)' in properties && properties['Time Spent (min)']?.type === 'number');
   const isAttemptsDB = hasItemRelation && hasResultSelect && hasTimeSpent;
 
   return {
     id: database.id,
     title,
     domain: matchedDomain || 'Unknown',
-    confidence,
+    confidence: finalConfidence,
     isLearningSheet,
     isAttemptsDB,
-    properties: Object.keys(properties),
+    properties: propertyNames,
     url: database.url,
-    lastEdited: database.last_edited_time
+    lastEdited: database.last_edited_time,
+    schemaFingerprint: generateSchemaFingerprint(database),
+    hasCPRD,
+    hasDomainTypicalProps,
+    itemCount: 0 // Will be populated later if needed
   };
 };
 
@@ -130,38 +240,148 @@ export const discoverDatabases = async (apiKey) => {
     byDomain[domain].push(db);
   });
 
+  // Store raw database objects for validation
+  const rawDatabases = {};
+  allDatabases.forEach(db => {
+    rawDatabases[db.id] = db;
+  });
+
   return {
     learningSheets,
-    attemptsDatabases: attemptsDatabases[0] || null, // Usually one attempts DB
+    attemptsDatabases, // Array - will be validated in prepareDatabaseMapping
     byDomain,
     unknown,
-    all: classified
+    all: classified,
+    rawDatabases // Store raw for property validation
+  };
+};
+
+/**
+ * Prepares database mapping proposal (does not auto-apply)
+ * Returns proposal with validation flags requiring confirmation
+ * @param {string} apiKey - Notion API key
+ * @param {Object} previousFingerprints - Previous schema fingerprints for change detection
+ * @returns {Promise<Object>} Proposal with auto-accept, warnings, and blocks
+ */
+export const prepareDatabaseMapping = async (apiKey, previousFingerprints = {}) => {
+  const discovery = await discoverDatabases(apiKey);
+  
+  const autoAccept = {}; // Domain → Database ID(s) - confidence ≥ 0.7, single DB per domain
+  const warnings = {};   // Domain → Database[] - confidence 0.4-0.7 or multiple DBs
+  const blocks = [];     // Databases that cannot be confidently classified
+  
+  // Validate attempts database
+  if (discovery.attemptsDatabases.length === 0) {
+    throw new Error('No attempts database found. Ensure you have a database with Item (relation), Result (select), and Time Spent (number) properties.');
+  }
+  if (discovery.attemptsDatabases.length > 1) {
+    throw new Error(`Multiple attempts databases found (${discovery.attemptsDatabases.length}). Only one attempts database is allowed.`);
+  }
+  const attemptsDB = discovery.attemptsDatabases[0];
+  const rawAttemptsDB = discovery.rawDatabases[attemptsDB.id];
+  
+  // Harden attempts DB validation: require Item relation and Result select
+  if (!rawAttemptsDB || !rawAttemptsDB.properties) {
+    throw new Error('Attempts database schema validation failed: properties not found.');
+  }
+  
+  const itemRelation = rawAttemptsDB.properties.Item;
+  if (!itemRelation || itemRelation.type !== 'relation') {
+    throw new Error('Attempts database must have Item property of type relation.');
+  }
+  
+  const resultSelect = rawAttemptsDB.properties.Result;
+  if (!resultSelect || resultSelect.type !== 'select') {
+    throw new Error('Attempts database must have Result property of type select.');
+  }
+  
+  // Extra guard: require Result select includes "Solved" option
+  const selectOptions = resultSelect.select?.options || [];
+  const hasSolvedOption = selectOptions.some(opt => 
+    opt.name === 'Solved' || opt.name?.toLowerCase() === 'solved'
+  );
+  if (!hasSolvedOption) {
+    throw new Error('Attempts database Result select must include "Solved" option. Found options: ' + 
+      (selectOptions.map(o => o.name).join(', ') || 'none'));
+  }
+  
+  // Check for schema fingerprint changes (mandatory re-analysis)
+  const fingerprintChanged = previousFingerprints[attemptsDB.id] && 
+                             previousFingerprints[attemptsDB.id] !== attemptsDB.schemaFingerprint;
+  
+  // Process learning sheets by domain
+  Object.entries(discovery.byDomain).forEach(([domain, databases]) => {
+    if (domain === 'Unknown') {
+      // Unknown domains cannot be auto-mapped
+      databases.forEach(db => {
+        blocks.push({
+          ...db,
+          blockReason: 'Domain classification unknown'
+        });
+      });
+      return;
+    }
+    
+    // Filter by confidence
+    const highConfidence = databases.filter(db => db.confidence >= CONFIDENCE_THRESHOLDS.AUTO_ACCEPT);
+    const mediumConfidence = databases.filter(db => 
+      db.confidence >= CONFIDENCE_THRESHOLDS.WARN && db.confidence < CONFIDENCE_THRESHOLDS.AUTO_ACCEPT
+    );
+    const lowConfidence = databases.filter(db => db.confidence < CONFIDENCE_THRESHOLDS.BLOCK);
+    
+    // Block low confidence with reason
+    lowConfidence.forEach(db => {
+      blocks.push({
+        ...db,
+        blockReason: `Confidence too low (${(db.confidence * 100).toFixed(0)}% < ${(CONFIDENCE_THRESHOLDS.BLOCK * 100).toFixed(0)}%)`
+      });
+    });
+    
+    // Handle high confidence
+    if (highConfidence.length === 1) {
+      // Single high-confidence DB → auto-accept
+      autoAccept[domain] = [highConfidence[0].id];
+    } else if (highConfidence.length > 1) {
+      // Multiple high-confidence DBs → require confirmation
+      warnings[domain] = highConfidence.map(db => ({
+        ...db,
+        warningReason: `Multiple databases found (${highConfidence.length})`
+      }));
+    } else if (mediumConfidence.length > 0) {
+      // Medium confidence → require confirmation
+      warnings[domain] = mediumConfidence.map(db => ({
+        ...db,
+        warningReason: `Low confidence classification (${(db.confidence * 100).toFixed(0)}%)`
+      }));
+    }
+  });
+  
+  return {
+    proposal: {
+      autoAccept,      // Domain → Database ID[] (arrays for future multi-DB support)
+      warnings,        // Domain → Database[] (requires confirmation)
+      blocks,          // Database[] (excluded from mapping)
+      attemptsDatabase: attemptsDB,
+      fingerprintChanged
+    },
+    discovery // Full discovery data for UI
   };
 };
 
 /**
  * Gets database mapping for session orchestration
- * Automatically maps discovered databases to domains
+ * Returns only auto-accepted mappings (confidence ≥ 0.7, single DB per domain)
+ * Use prepareDatabaseMapping for full proposal with validation
  * @param {string} apiKey - Notion API key
- * @returns {Promise<Object>} Domain → Database ID mapping
+ * @returns {Promise<Object>} Domain → Database ID[] mapping (arrays for multi-DB support)
  */
 export const getDatabaseMapping = async (apiKey) => {
-  const discovery = await discoverDatabases(apiKey);
-  const mapping = {};
-
-  // Map each domain to its best matching database
-  Object.entries(discovery.byDomain).forEach(([domain, databases]) => {
-    if (databases.length > 0) {
-      // Use the database with highest confidence, or first one
-      const best = databases.sort((a, b) => b.confidence - a.confidence)[0];
-      mapping[domain] = best.id;
-    }
-  });
-
+  const { proposal } = await prepareDatabaseMapping(apiKey);
+  
   return {
-    mapping,
-    attemptsDatabaseId: discovery.attemptsDatabases?.id || null,
-    discovery // Full discovery data for UI
+    mapping: proposal.autoAccept, // Domain → Database ID[]
+    attemptsDatabaseId: proposal.attemptsDatabase?.id || null,
+    proposal // Include full proposal for validation
   };
 };
 

@@ -1,0 +1,78 @@
+# Zero-Trust Data Mutation Rules
+
+## Core Principle
+
+**Never mutate user-owned data without explicit confirmation.**
+
+All data mutations must follow the proposal → confirmation → execution pattern.
+
+## Must (Data Mutation Pattern)
+
+### User-Owned Data (Notion Databases)
+
+- **Prepare functions** (`prepare*`) return plans/diffs only - NO mutation
+- **Apply functions** (`apply*`) require explicit user confirmation via UI
+- **Never auto-apply** schema changes, property updates, or data modifications
+- **Always show diffs** before applying changes
+- **Block execution** until user explicitly confirms
+
+### System-Owned Data (Attempts, Activity)
+
+- System-owned data can be auto-managed
+- Attempts/activity records are created automatically
+- Session state is managed internally
+- Cache and derived data can be updated without confirmation
+
+## Must (Notion API Integration)
+
+- Use `prepareSchemaUpgrade()` to propose schema changes
+- Use `applySchemaUpgrade()` only after UI confirmation
+- Use `prepareDataUpdate()` to propose data changes
+- Use `applyDataUpdate()` only after UI confirmation
+- Never call `apply*` functions directly from chat or automation
+
+## Must (UI Confirmation Flow)
+
+- Show upgrade/data change proposals in dedicated UI components
+- Display clear diffs showing what will change
+- Require explicit button click to confirm
+- Show error states if confirmation fails
+- Never auto-proceed on warnings or errors
+
+## Must (Error Handling)
+
+- Fail loudly on validation errors
+- Never silently degrade or fall back
+- Show actionable error messages
+- Block further execution until errors are resolved
+
+## Examples
+
+### ✅ CORRECT: Proposal → Confirmation → Execution
+
+```javascript
+// 1. Prepare (no mutation)
+const plan = await prepareSchemaUpgrade(apiKey, databaseId, requiredProperties);
+
+// 2. Show in UI (UpgradeFlow component)
+<UpgradeFlow plan={plan} onConfirm={handleConfirm} />
+
+// 3. Apply only after confirmation
+const handleConfirm = async () => {
+  await applySchemaUpgrade(apiKey, databaseId, plan);
+};
+```
+
+### ❌ WRONG: Direct Mutation
+
+```javascript
+// NEVER do this
+await applySchemaUpgrade(apiKey, databaseId, plan); // No confirmation!
+```
+
+## When to Apply
+
+- **Any time you add Notion API calls** that modify user data
+- **Any time you create schema upgrade flows**
+- **Any time you update database properties or items**
+- **Any time you add new mutation functions**

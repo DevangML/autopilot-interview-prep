@@ -1,0 +1,126 @@
+# Database Discovery Architecture Rules
+
+## Core Principle
+
+**Database discovery is proposal-only, never auto-decision.**
+
+All database mappings require validation and explicit confirmation for uncertain cases.
+
+## Must (Discovery Flow)
+
+### Discovery as Proposal
+
+- `prepareDatabaseMapping()` returns proposal with validation flags
+- `getDatabaseMapping()` returns only auto-accepted mappings (confidence ≥ 0.7)
+- Never auto-select databases without validation
+- Always treat discovery as proposal requiring review
+
+### Confidence Thresholds (Actionable, Not Informational)
+
+- **≥ 0.7 confidence**: Auto-accept (single DB per domain)
+- **0.4-0.7 confidence**: Warn and require confirmation
+- **< 0.4 confidence**: Block auto-mapping, exclude from proposal
+- **Multiple DBs per domain**: Always require confirmation (no auto-pick)
+
+### Confidence Calculation
+
+- **Title-only matches**: Capped at 0.5 (medium confidence)
+- **Schema signals**: CPRD presence (+0.3), domain-typical properties (proportional)
+- **Confidence floor**: 0.6 minimum when CPRD + domain-typical props + learning-sheet structure align
+- **Ambiguous names**: Rely more on schema signals than title
+
+## Must (Attempts Database Detection)
+
+### Schema Signature Requirements
+
+- **Item property**: Must exist and be relation type
+- **Result property**: Must exist and be select type
+- **Result select options**: Must include "Solved" option
+- **Time Spent property**: Must exist and be number type
+
+### Validation Rules
+
+- Fail loudly if zero attempts databases found
+- Fail loudly if more than one attempts database found
+- Fail loudly if schema signature incomplete
+- Fail loudly if "Solved" option missing
+- Never auto-select arbitrary attempts database
+- Never degrade silently or fall back
+
+## Must (Schema Fingerprinting)
+
+### Fingerprint Generation
+
+- Include property IDs + types + CPRD presence
+- Order-independent (sorted before hashing)
+- Stored in localStorage for change detection
+
+### Fingerprint Change Handling
+
+- Fingerprint change triggers mandatory re-analysis
+- Blocks session orchestration until re-confirmation
+- Shows clear warning in UI
+- Requires explicit re-confirmation
+
+## Must (Multi-Database Support)
+
+### Domain → Database Mapping
+
+- Mapping uses arrays: `domain → [databaseId1, databaseId2, ...]`
+- Support multiple databases per domain
+- Session orchestrator aggregates items across all DBs
+
+### Deterministic Merge Order
+
+- Sort by: item count (desc) > database ID (asc)
+- Preserve `sourceDatabaseId` metadata on every item
+- Ensures deterministic session composition across runs
+
+## Must (Confirmation UI)
+
+### Display Requirements
+
+- Show domain → database name(s) explicitly
+- Display confidence score for each database
+- Show exact reason for warning or block (1-2 bullets)
+- No implicit acceptance on warnings (button disabled)
+- No auto-progression on blocked mappings (button disabled)
+
+## Must (Error Handling)
+
+- Fail loudly on validation errors
+- Show specific error messages with context
+- Block orchestration until errors resolved
+- Never silently skip databases or fall back
+
+## Examples
+
+### ✅ CORRECT: Proposal with Validation
+
+```javascript
+const { proposal, discovery } = await prepareDatabaseMapping(apiKey);
+
+// Check for warnings/blocks
+if (Object.keys(proposal.warnings).length > 0) {
+  // Show confirmation UI
+  setShowMappingConfirmation(true);
+} else {
+  // Auto-accept high confidence
+  setDatabaseMapping(proposal.autoAccept);
+}
+```
+
+### ❌ WRONG: Auto-Decision
+
+```javascript
+// NEVER do this
+const mapping = await getDatabaseMapping(apiKey);
+// Using mapping without checking proposal.warnings
+```
+
+## When to Apply
+
+- **Any time you modify database discovery logic**
+- **Any time you add new domain classifications**
+- **Any time you change confidence calculation**
+- **Any time you modify attempts database detection**

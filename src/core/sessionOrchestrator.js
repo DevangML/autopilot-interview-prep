@@ -30,17 +30,46 @@ export const orchestrateSession = async ({
   attemptsData = {}
 }) => {
   // Fetch items from all databases
+  // Support multiple databases per domain (arrays) with deterministic merge order
   const allItems = await Promise.all(
-    Object.entries(databases).map(async ([domain, dbId]) => {
-      const items = await fetchDatabaseItems(apiKey, dbId, {
-        property: 'Completed',
-        checkbox: { equals: false }
+    Object.entries(databases).flatMap(([domain, dbIds]) => {
+      // Handle both single ID and array of IDs
+      const ids = Array.isArray(dbIds) ? dbIds : [dbIds];
+      
+      // Deterministic merge order: CPRD schema > item count > database ID
+      // First, fetch all databases to get metadata
+      return Promise.all(ids.map(async (dbId) => {
+        const items = await fetchDatabaseItems(apiKey, dbId, {
+          property: 'Completed',
+          checkbox: { equals: false }
+        });
+        return {
+          dbId,
+          items,
+          itemCount: items.length
+        };
+      })).then(dbResults => {
+        // Sort by: CPRD presence (hasCPRD), item count (desc), database ID (asc)
+        // Note: We don't have CPRD info here, so we'll use item count + ID
+        dbResults.sort((a, b) => {
+          // Higher item count first
+          if (b.itemCount !== a.itemCount) {
+            return b.itemCount - a.itemCount;
+          }
+          // Then deterministic tie-breaker (database ID)
+          return a.dbId.localeCompare(b.dbId);
+        });
+        
+        // Flatten items with source database metadata
+        return dbResults.flatMap(({ dbId, items }) => 
+          items.map(item => ({
+            ...item,
+            domain,
+            domainType: classifyDomain(domain),
+            sourceDatabaseId: dbId // Preserve source database metadata
+          }))
+        );
       });
-      return items.map(item => ({
-        ...item,
-        domain,
-        domainType: classifyDomain(domain)
-      }));
     })
   ).then(results => results.flat());
 

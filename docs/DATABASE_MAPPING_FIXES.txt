@@ -1,0 +1,42 @@
+DATABASE MAPPING SAFETY FIXES
+
+Discovery as Proposal
+- Changed from auto-decision to proposal requiring confirmation
+- prepareDatabaseMapping returns proposal with validation flags
+- Auto-accept only high-confidence single-DB mappings (≥ 0.7)
+- Files: src/services/notionDiscovery.js
+
+Confidence-Based Validation Gates
+- ≥ 0.7: auto-accept (single DB per domain)
+- 0.4-0.7: warn and require confirmation
+- < 0.4: block auto-mapping
+- Multiple DBs per domain: always require confirmation
+- Files: src/services/notionDiscovery.js
+
+Multiple Databases Per Domain
+- Changed mapping from domain → single ID to domain → ID array
+- Session orchestrator aggregates items across all DBs for a domain
+- Files: src/core/sessionOrchestrator.js, src/services/notionDiscovery.js
+
+Hardened Attempts Database Detection
+- Detects by schema signature only (Item relation + Result select + Time Spent number)
+- Fails loudly if zero or more than one attempts DB found
+- Never auto-selects arbitrary attempts DB
+- Files: src/services/notionDiscovery.js
+
+Schema Fingerprinting
+- Generates fingerprint from property names + types + CPRD presence
+- Detects schema changes and forces re-analysis
+- Files: src/services/notionDiscovery.js
+
+Confirmation UI
+- DatabaseMappingConfirmation component shows proposal with warnings
+- Reuses existing confirmation flow patterns (zero-trust)
+- Files: src/components/DatabaseMappingConfirmation.jsx, src/InterviewPrepApp.jsx
+
+Preserved Invariants
+- Zero-trust mutation rules unchanged
+- No silent auto-fixes
+- No new UI screens (reuses confirmation flows)
+- Session composition and coverage logic unchanged
+

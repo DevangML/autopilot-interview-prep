@@ -1,0 +1,17 @@
+FINAL HARDENING TWEAKS
+
+Attempts Database Detection Extra Guard
+- Added validation requiring Result select includes "Solved" option
+- Fails loudly with specific error if missing, blocks orchestration (no silent fallback)
+- Files: src/services/notionDiscovery.js
+
+Domain Classification Confidence Floor
+- Enforced minimum 0.6 confidence when CPRD + domain-typical props + learning-sheet structure align
+- Reduces unnecessary warn+confirm cases for well-structured databases
+- Title-only cap remains 0.5 unchanged
+- Files: src/services/notionDiscovery.js
+
+Preserved Invariants
+- Existing thresholds unchanged, zero-trust/proposal-only/determinism preserved
+- No new UI screens or settings added
+

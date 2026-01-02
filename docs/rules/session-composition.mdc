@@ -1,0 +1,111 @@
+# Session Composition Invariants
+
+## Core Principle
+
+**Session composition must be deterministic and exactly 3 units.**
+
+All session composition logic must preserve these invariants.
+
+## Must (Session Structure)
+
+### Exactly 3 Units
+
+- **Review Unit**: 5-8 minutes (recently completed items)
+- **Core Unit**: 20-32 minutes (based on focus mode)
+- **Breadth Unit**: 5-12 minutes (coverage debt priority)
+- **Total Duration**: 30, 45, or 90 minutes
+- **Never deviate** from 3-unit structure
+
+### Time Allocation
+
+- Fixed time allocations per focus mode
+- Cannot exceed total session duration
+- Must sum to total minutes exactly
+
+## Must (Deterministic Composition)
+
+### Merge Order
+
+- Multi-database aggregation: item count (desc) > database ID (asc)
+- Preserve `sourceDatabaseId` on every item
+- Same inputs → same outputs (deterministic)
+
+### Coverage Debt Calculation
+
+- Formula must remain unchanged
+- Weekly floor minutes per domain type
+- Minutes done last 7 days
+- Remaining vs completed units
+
+## Must (Domain Prioritization)
+
+### Domain Mode First, Then Type
+
+- Branch by domain mode (LEARNING, REVISION, POLISH) first
+- Then branch by domain type (FUNDAMENTALS, CODING, INTERVIEW, SPICE)
+- All existing difficulty logic preserved and extended
+
+### Difficulty Prioritization
+
+- **LEARNING mode**: Fundamentals use hard-first with failure backoff, Coding uses readiness-based
+- **REVISION mode**: Prioritize overdue and recently failed (attempt-derived, not time-based)
+- **POLISH mode**: Prioritize recall, refinement, and confidence-building
+
+## Must (Failure Backoff)
+
+### Attempt-Based Only
+
+- Track failure streak from attempts data only
+- Increment on failed attempts (Stuck/Skipped)
+- Reset to 0 on Solved or Partial
+- Compute: `effectiveDifficulty = baseDifficulty - min(1.5, failureStreak * 0.5)`
+- No time-based logic, dates, or resurfacing windows
+
+## Must (Pattern-Level Readiness)
+
+### Coding Domains
+
+- Aggregate readiness across items sharing same pattern
+- Use pattern readiness when metadata available
+- Fall back to item-level readiness if pattern missing
+- Record attempts at item level only
+
+## Must (Coverage Debt)
+
+### Formula Unchanged
+
+- Weekly floor minutes per domain type
+- Minutes done last 7 days
+- Remaining vs completed units
+- Never modify the formula
+
+## Examples
+
+### ✅ CORRECT: Deterministic 3-Unit Session
+
+```javascript
+const units = await orchestrateSession({
+  apiKey,
+  databases: mapping, // Domain → Database ID[]
+  totalMinutes: 45,
+  focusMode: 'balanced',
+  attemptsData
+});
+
+// Always returns exactly 3 units
+// { reviewUnit, coreUnit, breadthUnit }
+```
+
+### ❌ WRONG: Variable Unit Count
+
+```javascript
+// NEVER do this
+const units = items.slice(0, 5); // Variable count!
+```
+
+## When to Apply
+
+- **Any time you modify session orchestrator**
+- **Any time you change coverage debt calculation**
+- **Any time you modify difficulty prioritization**
+- **Any time you add new focus modes or durations**

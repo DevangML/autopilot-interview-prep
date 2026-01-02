@@ -1,0 +1,27 @@
+FINAL HARDENING FIXES
+
+Domain Classification Confidence
+- Extended confidence with schema signals (CPRD +0.3, domain-typical props proportional)
+- Title-only capped at 0.5, ambiguous names rely more on schema than title
+- Files: src/services/notionDiscovery.js
+
+Multi-Database Aggregation Determinism
+- Preserved sourceDatabaseId on items, stable merge order (item count desc > DB ID asc)
+- Files: src/core/sessionOrchestrator.js
+
+Hardened Attempts Database Detection
+- Requires Item relation and Result select with correct types, fails loudly if invalid
+- Files: src/services/notionDiscovery.js
+
+Strengthened Schema Fingerprinting
+- Property IDs + types + CPRD (order-independent), fingerprint change blocks orchestration
+- Files: src/services/notionDiscovery.js, src/InterviewPrepApp.jsx
+
+Confirmation UX Invariants
+- Shows domain → DB names, confidence scores, exact warning/block reasons
+- No implicit acceptance on warnings or auto-progression on blocks
+- Files: src/components/DatabaseMappingConfirmation.jsx
+
+Preserved Invariants
+- Discovery proposal-only, zero-trust unchanged, session/comverage/difficulty logic unchanged
+
