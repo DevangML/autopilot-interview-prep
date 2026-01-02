@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Intelligent DSA Helper",
+  "version": "1.0.0",
+  "description": "An AI-powered DSA helper that syncs with Notion and TUf+",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://api.notion.com/*",
+    "https://*.notion.so/*",
+    "https://*.notion.com/*",
+    "https://*.takeuforward.org/*",
+    "https://*.leetcode.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "action": {
+    "default_popup": "index.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.takeuforward.org/*",
+        "https://*.leetcode.com/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}

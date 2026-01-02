@@ -1,0 +1,38 @@
+# Chat UX contract (user bubble vs Thinking bubble)
+
+This rule keeps the chat experience polished for end users while preserving full developer traceability.
+
+## Must (separation of concerns)
+
+- User-facing message bubble must only render `content_markdown`:
+  - non-technical
+  - structured (headings, lists, emphasis)
+  - scannable and concise
+- Developer trace must render only inside the collapsed **Thinking** bubble:
+  - `reasoning_markdown`
+  - `progress` history
+- Never leak technical scaffolding into the user bubble:
+  - mode detection (`Run/Simulate/Rebrain`)
+  - target orchestrator name
+  - “Context / Outputs / Next Steps” meta blocks
+  - raw JSON/tool logs
+
+## Must (Thinking bubble UX)
+
+- Label it **Thinking** (not “Trace”).
+- Keep it collapsed by default after completion.
+- Copy button belongs inside the Thinking bubble (not on the main message header).
+- Thinking bubble content must be readable markdown (no raw `**` tokens showing):
+  - use the same markdown renderer pipeline as the main bubble (or an equivalent one)
+  - ensure code blocks and lists render correctly
+
+## Should (progress updates)
+
+- Avoid “dead” status text. Progress updates should be derived from real backend progress stages, not generic timers.
+- Do not keep the same state on screen for long initial waits; use meaningful stage transitions (still grounded in actual work being done).
+- UI transitions for progress should be animated and calm (avoid rapid non-animated refreshes that look like flicker).
+
+## Should (attachments)
+
+- Attachment chips are per-message: once the message is sent, remove chips from the composer UI.
+- Preserve attachment references internally for the run (links/ids), but don’t keep showing them as attached for future messages.

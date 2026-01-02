@@ -1,0 +1,89 @@
+# Bug-fixes intent: prompts + safety hardening
+
+This rule captures the **intent and nature of fixes** applied by Sahil on the `bug-fixes` branch, so we can keep future changes consistent and avoid regressions.
+
+## What these fixes optimize for
+
+- **Deterministic agent outputs**: prompts enforce strict JSON-only responses to prevent parsers from breaking.
+- **Runtime safety**: prompts explicitly forbid infinite loops / getting stuck.
+- **Contract correctness**: prompts force strict adherence to tool/agent/orchestrator input-output schemas.
+- **Security by default**: backend data access avoids SQL injection and validates user-provided filter keys.
+- **Minimality**: “only essential code / only fix what’s asked” to reduce unintended behavior changes.
+
+## Prompt rules (agents that generate or correct code)
+
+Derived from `bug-fixes` prompt edits (examples below).
+
+### Must
+
+- **Strict output format**: if the prompt says “single valid JSON object”, the model must output *only that JSON*, with no extra text.
+- **No infinite loops / no “stuck” code**: explicitly call this out in prompts for code generation and code correction.
+- **Schema adherence**: require strict conformity to each linked tool/agent/orchestrator `Inputs`/`Output` structures; do not guess keys.
+- **No helper functions** (unless strategy explicitly asks): tools/agents must be executed via the linked tool(s), not via new wrappers.
+- **No hardcoded values**: use `inputs` and intermediate variables; hardcode only if unavoidable and strategy-approved.
+- **Quoting consistency for generated code strings**: avoid inconsistent string literal quoting in `python_code` / `corrected_code` so downstream “fetch by key” doesn’t return truncated code.
+- **Minimal changes when correcting**: when acting as a code corrector, change only what the validation results require.
+
+### Should
+
+- **Front-load imports + input validation** inside `def orchestrate(inputs):` and keep *all* code inside the function body.
+- **Avoid noisy output**: no prints/logging unless the execution strategy explicitly asks for it.
+
+## Backend data safety rules (Data Layer Tables / reports)
+
+Derived from `bug-fixes` backend hardening on `LiberoidDataLayerTable`.
+
+- **Never string-interpolate filters into SQL**. Use **parameterized queries** (pass `filters` dict directly to `frappe.db.sql`) rather than manually replacing placeholders.
+- **Validate filter keys before executing**:
+  - For **DocType** sources: validate keys against `frappe.get_meta(doctype).fields` (plus standard fields like `name`, `owner`, etc).
+  - For **Report** sources: validate keys against report columns when determinable; fail fast with a clear `frappe.throw(...)` message when invalid.
+
+## DocType JSON hygiene (agent/tool config files)
+
+Observed across Sahil’s edits to agent configs:
+
+- **Use appropriate roles**: avoid `Ignore Permission` on agent records; prefer `System Manager` for system-owned configs.
+- **Prefer stable, minimal schemas**: avoid embedding large dynamic `inputs` arrays unless the system requires them; keep configs concise and compatible with how Liberoids loads agent/tool metadata.
+
+## Concrete examples from `bug-fixes`
+
+### Example: prevent SQL injection by parameterization
+
+Sahil removed manual placeholder replacement and relied on `frappe.db.sql(query, filters, ...)` parameterization:
+
+```python
+# BAD (string replacement / injection risk)
+for key, value in filters.items():
+    query = query.replace(f"%({key})s", f"'{value}'")
+
+# GOOD (parameterized)
+result = frappe.db.sql(query, filters, as_dict=True)
+```
+
+### Example: validate filters early and fail with actionable messages
+
+Sahil re-enabled and expanded `_validate_filters(...)`, calling it before fetching data and before computing stats, so invalid filter keys fail fast with a clear error.
+
+### Example: prompt hardening for code correction / generation
+
+Sahil added explicit “don’t get stuck”, “no helper functions”, “no hardcoded values”, and “avoid inconsistent quoting” constraints in code generation/correction prompts to reduce downstream failures when the system extracts code strings from JSON.
+
+## LLM response extraction hardening (Gemini “no parts” case)
+
+Gemini can occasionally return a candidate with `finish_reason=1` (stop) but **no content parts**, which causes `response.text` to raise:
+
+> `The response.text quick accessor requires the response to contain a valid Part, but none were returned`
+
+### Must
+
+- Do not assume `response.text` is always available; wrap it in `try/except`.
+- If `response.text` fails, attempt to extract text from `response.candidates[*].content.parts[*].text`.
+- If the response is still empty, retry once with a minimal “return valid JSON or {}” instruction appended (to avoid empty outputs).
+- If still empty, do one final attempt **without** `response_mime_type="application/json"` (plain text), then run JSON repair on the result.
+- If retries fail, raise an error that includes structured debug metadata (attempt number + finish_reason when available) so failures are diagnosable from run logs.
+
+## When you should apply this rule
+
+- **Any time you edit** `liberoids/liberoids/agent/*.json` or orchestrator prompts/agents that generate code.
+- **Any time you touch** `LiberoidDataLayerTable` query/report execution and filter handling.
+- **Any time you add new tools** that accept user-provided filters or any SQL-like input.
