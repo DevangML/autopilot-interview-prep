@@ -118,12 +118,18 @@ export const prepareSchemaUpgrade = async (apiKey, databaseId) => {
  * @returns {Promise<Object>} Result
  */
 export const applySchemaUpgrade = async (apiKey, databaseId, columnsToAdd) => {
-  const schema = await getDatabaseSchema(apiKey, databaseId);
-  const properties = { ...schema.properties };
+  // Only include properties we're adding/modifying to avoid issues with existing properties
+  const properties = {};
 
   // Add new columns
   columnsToAdd.forEach(col => {
     if (col.type === 'select') {
+      // Validate options don't contain commas (Notion restriction)
+      const invalidOptions = col.options.filter(opt => opt.includes(','));
+      if (invalidOptions.length > 0) {
+        throw new Error(`Select options cannot contain commas. Invalid options: ${invalidOptions.join(', ')}`);
+      }
+      
       properties[col.name] = {
         select: {
           options: col.options.map(opt => ({ name: opt }))
@@ -297,6 +303,111 @@ export const createAttempt = async (apiKey, attemptsDatabaseId, attemptData, ava
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Failed to create attempt: ${response.status} - ${errorText}`);
+  }
+
+  return await response.json();
+};
+
+/**
+ * Creates an attempts database in Notion (SYSTEM-OWNED, no confirmation needed)
+ * @param {string} apiKey - Notion API key
+ * @param {string} parentPageId - Optional parent page ID (creates in root if not provided)
+ * @returns {Promise<Object>} Created database with ID
+ */
+export const createAttemptsDatabase = async (apiKey, parentPageId = null) => {
+  const databaseTitle = [
+    {
+      type: 'text',
+      text: { content: 'Attempts' }
+    }
+  ];
+
+  const properties = {
+    'Item': {
+      relation: {
+        database_id: null, // Will be set when linking to learning databases
+        type: 'single_property'
+      }
+    },
+    'Result': {
+      select: {
+        options: [
+          { name: 'Solved', color: 'green' },
+          { name: 'Partial', color: 'yellow' },
+          { name: 'Failed', color: 'red' },
+          { name: 'Skipped', color: 'gray' }
+        ]
+      }
+    },
+    'Time Spent': {
+      number: {
+        format: 'number'
+      }
+    },
+    'Time Spent (min)': {
+      number: {
+        format: 'number'
+      }
+    },
+    'Sheet': {
+      select: {
+        options: [
+          { name: 'DSA', color: 'blue' },
+          { name: 'OS', color: 'purple' },
+          { name: 'DBMS', color: 'orange' },
+          { name: 'CN', color: 'pink' },
+          { name: 'OOP', color: 'brown' },
+          { name: 'Behavioral', color: 'purple' },
+          { name: 'HR', color: 'pink' },
+          { name: 'OA', color: 'orange' },
+          { name: 'Phone Screen', color: 'blue' },
+          { name: 'Aptitude', color: 'yellow' },
+          { name: 'Puzzles', color: 'red' },
+          { name: 'LLD', color: 'green' },
+          { name: 'HLD', color: 'cyan' }
+        ]
+      }
+    },
+    'Confidence': {
+      select: {
+        options: [
+          { name: 'High', color: 'green' },
+          { name: 'Medium', color: 'yellow' },
+          { name: 'Low', color: 'red' }
+        ]
+      }
+    },
+    'Hint Used': {
+      checkbox: {}
+    },
+    'Mistake Tags': {
+      multi_select: {
+        options: []
+      }
+    }
+  };
+
+  const requestBody = {
+    parent: parentPageId 
+      ? { page_id: parentPageId }
+      : { type: 'workspace', workspace: true },
+    title: databaseTitle,
+    properties
+  };
+
+  const response = await fetch('https://api.notion.com/v1/databases', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Notion-Version': NOTION_API_VERSION,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create attempts database: ${response.status} - ${errorText}`);
   }
 
   return await response.json();

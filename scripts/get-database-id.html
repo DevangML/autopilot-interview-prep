@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Get Notion Database ID</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #e0e0e0;
+    }
+    h1 {
+      color: #fff;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+    .input-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #ccc;
+      font-weight: 500;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #2a2a2a;
+      color: #fff;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: #4a9eff;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #4a9eff;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 20px;
+    }
+    button:hover {
+      background: #3a8eef;
+    }
+    button:disabled {
+      background: #555;
+      cursor: not-allowed;
+    }
+    .result {
+      margin-top: 20px;
+      padding: 15px;
+      background: #2a2a2a;
+      border-radius: 6px;
+      border: 1px solid #333;
+    }
+    .result.success {
+      border-color: #4caf50;
+      background: #1a3a1a;
+    }
+    .result.error {
+      border-color: #f44336;
+      background: #3a1a1a;
+    }
+    .result-label {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .result-value {
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 13px;
+      color: #4a9eff;
+      word-break: break-all;
+      padding: 8px;
+      background: #1a1a1a;
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+    .copy-btn {
+      margin-top: 10px;
+      padding: 6px 12px;
+      font-size: 12px;
+      background: #333;
+    }
+    .copy-btn:hover {
+      background: #444;
+    }
+    .instructions {
+      background: #2a2a2a;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .instructions h3 {
+      margin-top: 0;
+      color: #4a9eff;
+      font-size: 14px;
+    }
+    .instructions ol {
+      margin: 10px 0;
+      padding-left: 20px;
+    }
+    .instructions li {
+      margin: 5px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Get Notion Database ID</h1>
+  <p class="subtitle">Extract database ID from Notion URL</p>
+
+  <div class="instructions">
+    <h3>How to get your Database ID:</h3>
+    <ol>
+      <li>Open your Notion database in a browser</li>
+      <li>Copy the URL from the address bar</li>
+      <li>Paste it below and click "Extract ID"</li>
+      <li>Copy the extracted ID to use in your extension</li>
+    </ol>
+  </div>
+
+  <div class="input-group">
+    <label for="notionUrl">Notion Database URL:</label>
+    <input 
+      type="text" 
+      id="notionUrl" 
+      placeholder="https://www.notion.so/workspace/abc123def456..."
+      autocomplete="off"
+    >
+  </div>
+
+  <button id="extractBtn" onclick="extractDatabaseId()">Extract Database ID</button>
+
+  <div id="result" style="display: none;"></div>
+
+  <script>
+    function formatAsUUID(id) {
+      // Remove any existing hyphens and non-hex characters
+      const cleanId = id.replace(/[^a-f0-9]/gi, '');
+      
+      if (cleanId.length !== 32) {
+        throw new Error('Invalid ID length. Expected 32 hex characters.');
+      }
+      
+      // Format as UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      return `${cleanId.slice(0, 8)}-${cleanId.slice(8, 12)}-${cleanId.slice(12, 16)}-${cleanId.slice(16, 20)}-${cleanId.slice(20, 32)}`;
+    }
+
+    function extractDatabaseId() {
+      const urlInput = document.getElementById('notionUrl');
+      const resultDiv = document.getElementById('result');
+      const extractBtn = document.getElementById('extractBtn');
+      
+      const url = urlInput.value.trim();
+      
+      if (!url) {
+        showResult('error', 'Please enter a Notion URL');
+        return;
+      }
+
+      try {
+        // Try to extract ID from URL
+        // Format 1: https://www.notion.so/{workspace}/{database-id}?v=...
+        // Format 2: https://{workspace}.notion.so/{database-id}?v=...
+        let match = url.match(/notion\.so\/(?:[^\/]+\/)?([a-f0-9]{32})/i);
+        
+        if (!match) {
+          // Try alternative format: direct ID in URL
+          match = url.match(/([a-f0-9]{32})/i);
+        }
+
+        if (!match) {
+          throw new Error('Could not find database ID in URL. Make sure you copied the full URL from Notion.');
+        }
+
+        const rawId = match[1];
+        const formattedId = formatAsUUID(rawId);
+
+        showResult('success', 'Database ID extracted successfully!', formattedId);
+      } catch (error) {
+        showResult('error', error.message);
+      }
+    }
+
+    function showResult(type, message, value = null) {
+      const resultDiv = document.getElementById('result');
+      resultDiv.style.display = 'block';
+      resultDiv.className = `result ${type}`;
+      
+      let html = `<div class="result-label">${type === 'success' ? 'Success' : 'Error'}</div>`;
+      html += `<div>${message}</div>`;
+      
+      if (value) {
+        html += `<div class="result-value" id="dbIdValue">${value}</div>`;
+        html += `<button class="copy-btn" onclick="copyToClipboard('${value}')">Copy ID</button>`;
+      }
+      
+      resultDiv.innerHTML = html;
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        const copyBtn = document.querySelector('.copy-btn');
+        const originalText = copyBtn.textContent;
+        copyBtn.textContent = 'Copied!';
+        copyBtn.style.background = '#4caf50';
+        setTimeout(() => {
+          copyBtn.textContent = originalText;
+          copyBtn.style.background = '#333';
+        }, 2000);
+      }).catch(err => {
+        alert('Failed to copy. Please copy manually: ' + text);
+      });
+    }
+
+    // Allow Enter key to trigger extraction
+    document.getElementById('notionUrl').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        extractDatabaseId();
+      }
+    });
+  </script>
+</body>
+</html>
+

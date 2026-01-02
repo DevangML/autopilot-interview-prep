@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { BrainCircuit, Settings } from 'lucide-react';
+import { BrainCircuit, Settings, X } from 'lucide-react';
 import { useSession } from './hooks/useSession.js';
 import { useConfig } from './hooks/useConfig.js';
 import { SessionStarter } from './components/SessionStarter.jsx';
@@ -14,6 +14,7 @@ import { orchestrateSession } from './core/sessionOrchestrator.js';
 import { generateContent } from './services/gemini.js';
 import { prepareDatabaseMapping } from './services/notionDiscovery.js';
 import { DatabaseMappingConfirmation } from './components/DatabaseMappingConfirmation.jsx';
+import { AttemptsDatabaseSetup } from './components/AttemptsDatabaseSetup.jsx';
 import { useAttempts } from './hooks/useAttempts.js';
 
 function InterviewPrepApp() {
@@ -29,6 +30,8 @@ function InterviewPrepApp() {
   const [discoveryData, setDiscoveryData] = useState(null);
   const [mappingProposal, setMappingProposal] = useState(null);
   const [showMappingConfirmation, setShowMappingConfirmation] = useState(false);
+  const [showAttemptsSetup, setShowAttemptsSetup] = useState(false);
+  const [attemptsSetupError, setAttemptsSetupError] = useState(null);
   const { loadAttempts, recordAttempt, getAttemptsData } = useAttempts(
     config.notionKey,
     config.attemptsDatabaseId
@@ -77,7 +80,13 @@ function InterviewPrepApp() {
         })
         .catch(err => {
           console.error('Database discovery failed:', err);
-          setError(`Database discovery failed: ${err.message}`);
+          // Check if error is about missing attempts database
+          if (err.message.includes('No attempts database found') || err.message.includes('attempts database')) {
+            setShowAttemptsSetup(true);
+            setAttemptsSetupError(err.message);
+          } else {
+            setError(`Database discovery failed: ${err.message}`);
+          }
         });
     }
   }, [config.notionKey]);
@@ -156,6 +165,60 @@ function InterviewPrepApp() {
   const geminiService = {
     generateContent: (prompt, options) => generateContent(config.geminiKey, prompt, options)
   };
+
+  // Attempts database setup view
+  if (showAttemptsSetup) {
+    return (
+      <div className="w-full h-full bg-[#0B0F19] text-white flex flex-col rounded-2xl relative overflow-hidden">
+        <div className="flex relative z-10 flex-col px-5 py-6 h-full">
+          <div className="flex gap-4 items-center mb-6">
+            <button
+              onClick={() => {
+                setShowAttemptsSetup(false);
+                setAttemptsSetupError(null);
+              }}
+              className="p-2 rounded-lg hover:bg-white/5"
+            >
+              <X className="w-5 h-5 text-gray-400" />
+            </button>
+            <div>
+              <h2 className="text-lg font-semibold">Setup Required</h2>
+              <p className="mt-0.5 text-xs text-gray-500">Create your attempts database</p>
+            </div>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            <AttemptsDatabaseSetup
+              apiKey={config.notionKey}
+              onDatabaseCreated={(databaseId) => {
+                updateConfig({ attemptsDatabaseId: databaseId });
+                setShowAttemptsSetup(false);
+                setAttemptsSetupError(null);
+                // Trigger database discovery again
+                const previousFingerprints = JSON.parse(
+                  localStorage.getItem('notionSchemaFingerprints') || '{}'
+                );
+                prepareDatabaseMapping(config.notionKey, previousFingerprints)
+                  .then(({ proposal, discovery }) => {
+                    setDiscoveryData(discovery);
+                    setDatabaseMapping(proposal.autoAccept);
+                    if (proposal.attemptsDatabase) {
+                      updateConfig({ attemptsDatabaseId: proposal.attemptsDatabase.id });
+                    }
+                  })
+                  .catch(err => {
+                    setError(`Database discovery failed: ${err.message}`);
+                  });
+              }}
+              onCancel={() => {
+                setShowAttemptsSetup(false);
+                setAttemptsSetupError(null);
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Database mapping confirmation view
   if (showMappingConfirmation && mappingProposal) {
