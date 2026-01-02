@@ -1512,7 +1512,7 @@ but it may act only after explicit user commitment.
 **Services (3 files):**
 8. `src/services/notion.js` - Notion API with zero-trust
 9. `src/services/gemini.js` - Gemini AI service
-10. `src/services/storage.js` - Chrome storage wrapper
+10. `src/services/storage.js` - Storage wrapper
 
 **Hooks (3 files):**
 11. `src/hooks/useSession.js` - Session state management
@@ -1575,4 +1575,3 @@ The architecture is **production-ready**. Remaining work is integration (connect
 **Document Version:** 1.0  
 **Last Updated:** 2024  
 **Status:** Complete
-

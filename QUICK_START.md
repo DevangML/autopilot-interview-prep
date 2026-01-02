@@ -22,7 +22,7 @@ The system **automatically discovers** databases for all domains:
 
 1. **Create an Attempts Database** (see below)
 2. **Name your learning databases clearly** (e.g., "DSA Problems", "OS Concepts")
-3. **Open Interview Prep Platform** - it will discover everything automatically!
+3. **Open the web app** - it will discover everything automatically!
 
 ## Creating Your Attempts Database
 
@@ -82,12 +82,7 @@ abc123de-f456-7890-abcd-ef1234567890
 
 ## Configuration
 
-### Extension Popup (Quick Problem Tracking)
-
-- **DSA Database ID**: Enter manually (for the extension popup feature)
-- This is separate from the Interview Prep Platform
-
-### Interview Prep Platform
+### Web App
 
 - **Notion API Key**: Required
 - **Gemini API Key**: Required (for AI features)
@@ -120,13 +115,10 @@ abc123de-f456-7890-abcd-ef1234567890
 ## Next Steps
 
 1. ✅ Create attempts database (see above)
-2. ✅ Open Interview Prep Platform (click "Interview Prep" button in extension)
+2. ✅ Open the web app
 3. ✅ Enter your API keys in Settings
 4. ✅ System will auto-discover all databases
 5. ✅ Review mapping if needed (for low-confidence matches)
 6. ✅ Start your first session!
 
 ---
-
-**Remember**: You only need to manually enter the DSA database ID in the extension popup. The Interview Prep Platform discovers everything automatically!
-

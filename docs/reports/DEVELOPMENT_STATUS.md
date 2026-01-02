@@ -23,7 +23,7 @@ However, there are **integration tasks** and **refinements** needed to make it f
 2. **Service Layer** - API integrations ready
    - Notion API with zero-trust patterns
    - Gemini API with error recovery
-   - Chrome storage wrapper
+   - Storage wrapper
 
 3. **UI Components** - Structure complete
    - Session starter
@@ -160,4 +160,3 @@ This means:
 2. **Short-term**: Add multi-database configuration UI
 3. **Medium-term**: Add comprehensive error handling
 4. **Long-term**: Add tests and performance optimizations
-

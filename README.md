@@ -1,6 +1,6 @@
 # Autopilot Interview Preparation Platform
 
-> A production-grade Chrome extension that orchestrates intelligent interview preparation sessions with zero-trust data mutation and automatic database discovery.
+> A production-grade web app that orchestrates intelligent interview preparation sessions with zero-trust data mutation and automatic database discovery.
 
 [![Architecture](https://img.shields.io/badge/Architecture-Zero--Trust-blue)]()
 [![Database Discovery](https://img.shields.io/badge/Database-Auto--Discovery-green)]()
@@ -39,7 +39,7 @@ src/
 │   ├── notion.js       # Notion API (zero-trust)
 │   ├── notionDiscovery.js  # Auto database discovery
 │   ├── gemini.js       # Gemini AI service
-│   └── storage.js      # Chrome storage wrapper
+│   └── storage.js      # Web storage wrapper
 ├── hooks/             # React state (50-100 lines/file)
 │   ├── useSession.js   # Session lifecycle
 │   ├── useConfig.js    # Configuration
@@ -77,7 +77,7 @@ src/
 ### Prerequisites
 
 - Node.js 18+
-- Chrome browser
+- Modern browser
 - Notion workspace with databases
 - Notion API key
 - Gemini API key (optional, for AI features)
@@ -97,18 +97,18 @@ src/
    VITE_GEMINI_KEY=your_gemini_key
    ```
    
-   Or configure via Settings UI in the extension.
+   Or configure via Settings UI in the app.
 
 3. **Build:**
    ```bash
    npm run build
    ```
 
-4. **Load extension:**
-   - Open `chrome://extensions/`
-   - Enable Developer Mode
-   - Click "Load unpacked"
-   - Select the `dist` folder
+4. **Run locally:**
+   ```bash
+   npm run dev
+   ```
+   Then open the local Vite URL in your browser.
 
 ### Development
 

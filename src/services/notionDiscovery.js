@@ -15,6 +15,27 @@ const CONFIDENCE_THRESHOLDS = {
   BLOCK: 0.4         // < 0.4 → block auto-mapping
 };
 
+const normalizeLabel = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+const buildNormalizedPropertySet = (properties = {}) =>
+  new Set(Object.keys(properties).map(normalizeLabel));
+
+const hasAnyProperty = (normalizedPropertySet, names) =>
+  names.some(name => normalizedPropertySet.has(normalizeLabel(name)));
+
+const findPropertyByNames = (properties = {}, names = []) => {
+  const target = new Set(names.map(normalizeLabel));
+  for (const [name, prop] of Object.entries(properties)) {
+    if (target.has(normalizeLabel(name))) {
+      return { name, prop };
+    }
+  }
+  return null;
+};
+
 /**
  * Generates schema fingerprint for a database
  * Includes property IDs + types + CPRD presence (order-independent)
@@ -47,29 +68,46 @@ const generateSchemaFingerprint = (database) => {
  * @returns {Promise<Array>} Array of database objects with metadata
  */
 export const searchAllDatabases = async (apiKey) => {
-  const response = await fetch('https://api.notion.com/v1/search', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Notion-Version': NOTION_API_VERSION,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      filter: {
-        property: 'object',
-        value: 'database'
-      },
-      page_size: 100
-    })
-  });
+  const allResults = [];
+  let nextCursor = undefined;
+  let safetyCounter = 0;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Notion Search API Error: ${response.status} - ${errorText}`);
+  while (safetyCounter < 50) {
+    const response = await fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Notion-Version': NOTION_API_VERSION,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filter: {
+          property: 'object',
+          value: 'database'
+        },
+        page_size: 100,
+        start_cursor: nextCursor
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Notion Search API Error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    const results = data.results || [];
+    allResults.push(...results);
+
+    if (!data.has_more || !data.next_cursor) {
+      break;
+    }
+
+    nextCursor = data.next_cursor;
+    safetyCounter += 1;
   }
 
-  const data = await response.json();
-  return data.results || [];
+  return allResults;
 };
 
 /**
@@ -77,19 +115,30 @@ export const searchAllDatabases = async (apiKey) => {
  * Properties that strongly indicate a domain
  */
 const DOMAIN_TYPICAL_PROPERTIES = {
-  'DSA': ['Difficulty', 'Pattern', 'Topic', 'LeetCode Link', 'CPRD: Difficulty'],
-  'OOP': ['Principles', 'Concepts', 'Examples', 'CPRD: Concepts'],
-  'OS': ['Concepts', 'Processes', 'Memory', 'CPRD: Concepts'],
-  'DBMS': ['SQL', 'Queries', 'Normalization', 'CPRD: Concepts'],
-  'CN': ['Protocols', 'Layers', 'TCP/IP', 'CPRD: Concepts'],
-  'Behavioral': ['STAR', 'Situation', 'Action', 'Result', 'CPRD: Story'],
-  'HR': ['Question', 'Answer', 'CPRD: Story'],
-  'OA': ['Difficulty', 'Company', 'CPRD: Difficulty'],
-  'Phone Screen': ['Question', 'Answer', 'CPRD: Q&A'],
-  'Aptitude': ['Type', 'Difficulty', 'CPRD: Difficulty'],
-  'Puzzles': ['Type', 'Difficulty', 'CPRD: Difficulty'],
-  'LLD': ['Design', 'Classes', 'Relationships', 'CPRD: Design'],
-  'HLD': ['System', 'Components', 'Scalability', 'CPRD: Design']
+  'DSA': ['Difficulty', 'Pattern', 'Topic', 'LeetCode Link', 'Leetcode Link', 'LeetCode URL', 'Problem Link', 'Company', 'Tags', 'CPRD: Difficulty'],
+  'OOP': ['Principles', 'Concepts', 'Examples', 'Design Pattern', 'UML', 'CPRD: Concepts'],
+  'OS': ['Processes', 'Threads', 'Memory', 'Scheduling', 'Synchronization', 'CPRD: Concepts'],
+  'DBMS': ['SQL', 'Queries', 'Normalization', 'Indexes', 'Transactions', 'CPRD: Concepts'],
+  'CN': ['Protocols', 'Layers', 'TCP', 'HTTP', 'OSI', 'CPRD: Concepts'],
+  'Behavioral': ['STAR', 'Situation', 'Action', 'Result', 'Story', 'CPRD: Story'],
+  'HR': ['Question', 'Answer', 'STAR', 'CPRD: Story'],
+  'OA': ['Company', 'Difficulty', 'Platform', 'Assessment', 'CPRD: Difficulty'],
+  'Phone Screen': ['Question', 'Answer', 'Prompt', 'CPRD: Q&A'],
+  'Aptitude': ['Type', 'Difficulty', 'Category', 'CPRD: Difficulty'],
+  'Puzzles': ['Type', 'Difficulty', 'Solution', 'CPRD: Difficulty'],
+  'LLD': ['Design', 'Classes', 'Class', 'Relationships', 'UML', 'CPRD: Design'],
+  'HLD': ['Components', 'Scalability', 'Architecture', 'Tradeoffs', 'CPRD: Design']
+};
+
+const getDomainPropertyMatch = (domain, normalizedPropertySet) => {
+  const typicalProps = DOMAIN_TYPICAL_PROPERTIES[domain] || [];
+  const normalizedTypical = [...new Set(typicalProps.map(normalizeLabel))];
+  const matchingProps = normalizedTypical.filter(prop => normalizedPropertySet.has(prop));
+  return {
+    matchingProps,
+    matchCount: matchingProps.length,
+    matchRatio: normalizedTypical.length > 0 ? matchingProps.length / normalizedTypical.length : 0
+  };
 };
 
 /**
@@ -103,22 +152,23 @@ export const classifyDatabase = (database) => {
   const titleLower = title.toLowerCase();
   const properties = database.properties || {};
   const propertyNames = Object.keys(properties);
+  const normalizedPropertySet = buildNormalizedPropertySet(properties);
   
   // Domain keywords mapping
   const domainKeywords = {
-    'DSA': ['dsa', 'data structure', 'algorithm', 'leetcode', 'coding', 'problem'],
-    'OOP': ['oop', 'object oriented', 'class', 'inheritance', 'polymorphism'],
-    'OS': ['os', 'operating system', 'process', 'thread', 'memory'],
-    'DBMS': ['dbms', 'database', 'sql', 'query', 'schema'],
-    'CN': ['cn', 'computer network', 'network', 'tcp', 'http', 'protocol'],
-    'Behavioral': ['behavioral', 'behavior', 'interview', 'story', 'star'],
-    'HR': ['hr', 'human resource', 'behavioral'],
-    'OA': ['oa', 'online assessment', 'coding test'],
-    'Phone Screen': ['phone', 'screen', 'phone screen'],
-    'Aptitude': ['aptitude', 'quantitative', 'math'],
-    'Puzzles': ['puzzle', 'brain teaser', 'riddle'],
-    'LLD': ['lld', 'low level design', 'object design'],
-    'HLD': ['hld', 'high level design', 'system design']
+    'DSA': ['dsa', 'data structure', 'data structures', 'algorithm', 'algorithms', 'leetcode', 'neetcode', 'blind 75', 'coding'],
+    'OOP': ['oop', 'object oriented', 'object-oriented', 'class', 'inheritance', 'polymorphism', 'encapsulation'],
+    'OS': ['os', 'operating system', 'process', 'thread', 'memory', 'scheduling'],
+    'DBMS': ['dbms', 'database management', 'database', 'sql', 'query', 'normalization', 'transaction'],
+    'CN': ['cn', 'computer network', 'networks', 'network', 'tcp', 'http', 'protocol', 'osi'],
+    'Behavioral': ['behavioral', 'behavioural', 'story', 'star', 'situational'],
+    'HR': ['hr', 'human resource', 'human resources'],
+    'OA': ['oa', 'online assessment', 'assessment', 'coding test'],
+    'Phone Screen': ['phone screen', 'phone interview', 'screening'],
+    'Aptitude': ['aptitude', 'quant', 'quantitative', 'math', 'logic'],
+    'Puzzles': ['puzzle', 'puzzles', 'brain teaser', 'riddle'],
+    'LLD': ['lld', 'low level design', 'low-level design', 'object design', 'class design'],
+    'HLD': ['hld', 'high level design', 'high-level design', 'system design', 'architecture']
   };
 
   // Check title for domain match (title-only confidence capped at medium)
@@ -141,39 +191,74 @@ export const classifyDatabase = (database) => {
     titleConfidence = 0.5;
   }
 
+  // Schema-based domain inference (when titles are weak or ambiguous)
+  const schemaDomainScores = Object.keys(DOMAIN_TYPICAL_PROPERTIES).map(domain => {
+    const { matchCount, matchRatio } = getDomainPropertyMatch(domain, normalizedPropertySet);
+    return { domain, matchCount, matchRatio };
+  }).sort((a, b) => {
+    if (b.matchRatio !== a.matchRatio) return b.matchRatio - a.matchRatio;
+    if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
+    return a.domain.localeCompare(b.domain);
+  });
+
+  const bestSchema = schemaDomainScores[0];
+  const schemaDomainCandidate = bestSchema && bestSchema.matchCount >= 2 && bestSchema.matchRatio >= 0.2
+    ? bestSchema.domain
+    : null;
+
   // Schema-based confidence boosts
   let schemaConfidence = 0;
   let hasCPRD = false;
   let hasDomainTypicalProps = false;
 
   // Check for CPRD columns (strong signal)
-  const cprdProps = propertyNames.filter(name => name.startsWith('CPRD:'));
+  const cprdProps = propertyNames.filter(name => name.toLowerCase().startsWith('cprd:'));
   if (cprdProps.length > 0) {
     hasCPRD = true;
     schemaConfidence += 0.3; // Strong boost for CPRD presence
   }
 
   // Check for domain-typical properties
+  const ambiguousTokens = ['interview', 'prep', 'notes', 'tracker', 'sheet', 'study'];
+  const isAmbiguous = ambiguousTokens.some(token => titleLower.includes(token));
+  const titleWeak = titleConfidence < 0.25;
+
+  if (!matchedDomain && schemaDomainCandidate) {
+    matchedDomain = schemaDomainCandidate;
+  } else if (
+    matchedDomain &&
+    schemaDomainCandidate &&
+    matchedDomain !== schemaDomainCandidate &&
+    (isAmbiguous || titleWeak)
+  ) {
+    matchedDomain = schemaDomainCandidate;
+  }
+
   if (matchedDomain && DOMAIN_TYPICAL_PROPERTIES[matchedDomain]) {
-    const typicalProps = DOMAIN_TYPICAL_PROPERTIES[matchedDomain];
-    const matchingProps = typicalProps.filter(prop => propertyNames.includes(prop));
-    if (matchingProps.length > 0) {
+    const { matchCount, matchRatio } = getDomainPropertyMatch(matchedDomain, normalizedPropertySet);
+    if (matchCount > 0) {
       hasDomainTypicalProps = true;
-      schemaConfidence += 0.2 * (matchingProps.length / typicalProps.length); // Proportional boost
+      schemaConfidence += 0.2 * matchRatio; // Proportional boost
     }
   }
 
   // Final confidence: title + schema signals
   // For ambiguous names, schema signals dominate
-  const isAmbiguous = titleLower.includes('interview') || titleLower.includes('prep') || 
-                      titleLower.includes('notes') || titleLower.includes('systems');
-
   // Analyze properties to determine if it's a learning sheet
-  const hasNameProperty = 'Name' in properties || 'Title' in properties || 'Problem' in properties;
-  const hasCompletedProperty = 'Completed' in properties || 'Status' in properties || 'Done' in properties;
-  const hasLinkProperty = 'Link' in properties || 'URL' in properties || 'LeetCode Link' in properties;
+  const hasNameProperty = hasAnyProperty(normalizedPropertySet, [
+    'Name', 'Title', 'Problem', 'Question', 'Prompt'
+  ]);
+  const hasCompletedProperty = hasAnyProperty(normalizedPropertySet, [
+    'Completed', 'Status', 'Done', 'Solved', 'Progress', 'Result'
+  ]);
+  const hasLinkProperty = hasAnyProperty(normalizedPropertySet, [
+    'Link', 'URL', 'LeetCode Link', 'Leetcode Link', 'LeetCode URL', 'Problem Link', 'Reference', 'Resource'
+  ]);
+  const hasDifficultyProperty = hasAnyProperty(normalizedPropertySet, [
+    'Difficulty', 'Level', 'CPRD: Difficulty'
+  ]);
   
-  const isLearningSheet = hasNameProperty && (hasCompletedProperty || hasLinkProperty);
+  const isLearningSheet = hasNameProperty && (hasCompletedProperty || hasLinkProperty || hasDifficultyProperty);
   
   let finalConfidence;
   if (isAmbiguous && schemaConfidence > 0) {
@@ -192,10 +277,17 @@ export const classifyDatabase = (database) => {
 
   // Harden attempts database detection - schema signature only
   // Must have ALL three: Item (relation), Result (select), Time Spent (number)
-  const hasItemRelation = 'Item' in properties && properties.Item?.type === 'relation';
-  const hasResultSelect = 'Result' in properties && properties.Result?.type === 'select';
-  const hasTimeSpent = ('Time Spent' in properties && properties['Time Spent']?.type === 'number') ||
-                       ('Time Spent (min)' in properties && properties['Time Spent (min)']?.type === 'number');
+  const itemRelation = findPropertyByNames(properties, ['Item']);
+  const resultSelect = findPropertyByNames(properties, ['Result']);
+  const timeSpent = findPropertyByNames(properties, [
+    'Time Spent',
+    'Time Spent (min)',
+    'Time Spent (mins)',
+    'Time Spent Minutes'
+  ]);
+  const hasItemRelation = itemRelation?.prop?.type === 'relation';
+  const hasResultSelect = resultSelect?.prop?.type === 'select';
+  const hasTimeSpent = timeSpent?.prop?.type === 'number';
   const isAttemptsDB = hasItemRelation && hasResultSelect && hasTimeSpent;
 
   return {
@@ -223,7 +315,13 @@ export const classifyDatabase = (database) => {
 export const discoverDatabases = async (apiKey) => {
   const allDatabases = await searchAllDatabases(apiKey);
   
-  const classified = allDatabases.map(classifyDatabase);
+  const classified = allDatabases
+    .map(classifyDatabase)
+    .sort((a, b) => {
+      const titleCompare = a.title.localeCompare(b.title);
+      if (titleCompare !== 0) return titleCompare;
+      return a.id.localeCompare(b.id);
+    });
   
   // Organize by type
   const learningSheets = classified.filter(db => db.isLearningSheet && !db.isAttemptsDB);
@@ -238,6 +336,15 @@ export const discoverDatabases = async (apiKey) => {
       byDomain[domain] = [];
     }
     byDomain[domain].push(db);
+  });
+
+  Object.values(byDomain).forEach(list => {
+    list.sort((a, b) => {
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      const titleCompare = a.title.localeCompare(b.title);
+      if (titleCompare !== 0) return titleCompare;
+      return a.id.localeCompare(b.id);
+    });
   });
 
   // Store raw database objects for validation
@@ -286,18 +393,28 @@ export const prepareDatabaseMapping = async (apiKey, previousFingerprints = {}) 
     throw new Error('Attempts database schema validation failed: properties not found.');
   }
   
-  const itemRelation = rawAttemptsDB.properties.Item;
-  if (!itemRelation || itemRelation.type !== 'relation') {
+  const itemRelation = findPropertyByNames(rawAttemptsDB.properties, ['Item']);
+  if (!itemRelation || itemRelation.prop?.type !== 'relation') {
     throw new Error('Attempts database must have Item property of type relation.');
   }
   
-  const resultSelect = rawAttemptsDB.properties.Result;
-  if (!resultSelect || resultSelect.type !== 'select') {
+  const resultSelect = findPropertyByNames(rawAttemptsDB.properties, ['Result']);
+  if (!resultSelect || resultSelect.prop?.type !== 'select') {
     throw new Error('Attempts database must have Result property of type select.');
+  }
+
+  const timeSpent = findPropertyByNames(rawAttemptsDB.properties, [
+    'Time Spent',
+    'Time Spent (min)',
+    'Time Spent (mins)',
+    'Time Spent Minutes'
+  ]);
+  if (!timeSpent || timeSpent.prop?.type !== 'number') {
+    throw new Error('Attempts database must have Time Spent property of type number.');
   }
   
   // Extra guard: require Result select includes "Solved" option
-  const selectOptions = resultSelect.select?.options || [];
+  const selectOptions = resultSelect.prop?.select?.options || [];
   const hasSolvedOption = selectOptions.some(opt => 
     opt.name === 'Solved' || opt.name?.toLowerCase() === 'solved'
   );

@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import url('https://rsms.me/inter/inter.css');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 @theme {
   --color-md-background: #0B0F19;
@@ -9,30 +9,26 @@
 
 /* Base styles */
 html, body, #root {
-  width: 420px;
-  height: 600px;
+  width: 100%;
+  min-height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden;
-  border-radius: 16px;
-}
-
-#root {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 
-    0 0 0 1px rgba(0, 0, 0, 0.5),
-    0 25px 50px -12px rgba(0, 0, 0, 0.5),
-    0 0 80px -20px rgba(99, 102, 241, 0.15);
 }
 
 body {
+  min-height: 100vh;
+  overflow: hidden;
   background-color: var(--color-md-background);
   color: white;
-  font-family: 'Inter var', 'Inter', system-ui, sans-serif;
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.011em;
+}
+
+#root {
+  min-height: 100vh;
 }
 
 /* Animated Mesh Gradient Background */

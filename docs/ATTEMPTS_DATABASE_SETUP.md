@@ -139,5 +139,4 @@ If you need to get a database ID manually:
 
 ---
 
-**Note**: You only need to manually enter the DSA database ID in the extension popup for the quick problem tracking feature. The Interview Prep Platform automatically discovers all databases.
-
+**Note**: The web app automatically discovers all learning databases once your Notion API key is connected.

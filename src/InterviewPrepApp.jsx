@@ -169,8 +169,8 @@ function InterviewPrepApp() {
   // Attempts database setup view
   if (showAttemptsSetup) {
     return (
-      <div className="w-full h-full bg-[#0B0F19] text-white flex flex-col rounded-2xl relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 h-full">
+      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
+        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
           <div className="flex gap-4 items-center mb-6">
             <button
               onClick={() => {
@@ -223,8 +223,8 @@ function InterviewPrepApp() {
   // Database mapping confirmation view
   if (showMappingConfirmation && mappingProposal) {
     return (
-      <div className="w-full h-full bg-[#0B0F19] text-white flex flex-col rounded-2xl relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 h-full">
+      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
+        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
           <div className="flex gap-4 items-center mb-6">
             <button
               onClick={() => {
@@ -274,8 +274,8 @@ function InterviewPrepApp() {
   // Settings view
   if (showSettings) {
     return (
-      <div className="w-full h-full bg-[#0B0F19] text-white flex flex-col rounded-2xl relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 h-full">
+      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
+        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
           <div className="flex gap-4 items-center mb-8">
             <div className="p-3 bg-gradient-to-br rounded-xl border shadow-lg from-white/10 to-white/5 border-white/10">
               <Settings className="w-5 h-5 text-blue-400" />
@@ -351,8 +351,8 @@ function InterviewPrepApp() {
   // Upgrade flow view
   if (showUpgrade) {
     return (
-      <div className="w-full h-full bg-[#0B0F19] text-white flex flex-col rounded-2xl relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 h-full">
+      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
+        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
           <div className="flex gap-4 items-center mb-6">
             <button
               onClick={() => setShowUpgrade(false)}
@@ -366,17 +366,20 @@ function InterviewPrepApp() {
             </div>
           </div>
           <div className="overflow-y-auto flex-1">
-            {databaseMapping && Object.entries(databaseMapping).map(([domain, dbId]) => (
-              <div key={domain} className="mb-4">
-                <div className="text-xs font-semibold text-gray-400 mb-2">{domain}</div>
-                <UpgradeFlow
-                  apiKey={config.notionKey}
-                  databaseId={dbId}
-                  onComplete={() => setShowUpgrade(false)}
-                  onCancel={() => setShowUpgrade(false)}
-                />
-              </div>
-            ))}
+            {databaseMapping && Object.entries(databaseMapping).flatMap(([domain, dbIds]) => {
+              const ids = Array.isArray(dbIds) ? dbIds : [dbIds];
+              return ids.map((dbId) => (
+                <div key={`${domain}-${dbId}`} className="mb-4">
+                  <div className="text-xs font-semibold text-gray-400 mb-2">{domain}</div>
+                  <UpgradeFlow
+                    apiKey={config.notionKey}
+                    databaseId={dbId}
+                    onComplete={() => setShowUpgrade(false)}
+                    onCancel={() => setShowUpgrade(false)}
+                  />
+                </div>
+              ));
+            })}
           </div>
         </div>
       </div>
@@ -385,8 +388,8 @@ function InterviewPrepApp() {
 
   // Main view
   return (
-    <div className="w-full h-full bg-[#0B0F19] text-white flex flex-col rounded-2xl relative overflow-hidden">
-      <div className="flex relative z-10 flex-col px-5 py-6 h-full">
+    <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
+      <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
         {/* Header */}
         <header className="flex justify-between items-center mb-6">
           <div className="flex gap-3 items-center">
