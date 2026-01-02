@@ -4,6 +4,8 @@
  * Treats discovery as proposal, not decision - requires confirmation for uncertain cases
  */
 
+import { fetchWithProxy } from '../utils/fetchWithProxy.js';
+
 const NOTION_API_VERSION = '2022-06-28';
 
 /**
@@ -68,43 +70,71 @@ const generateSchemaFingerprint = (database) => {
  * @returns {Promise<Array>} Array of database objects with metadata
  */
 export const searchAllDatabases = async (apiKey) => {
+  if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') {
+    throw new Error('Notion API key is required. Please enter your API key in Settings.');
+  }
+
   const allResults = [];
   let nextCursor = undefined;
   let safetyCounter = 0;
 
-  while (safetyCounter < 50) {
-    const response = await fetch('https://api.notion.com/v1/search', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Notion-Version': NOTION_API_VERSION,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        filter: {
-          property: 'object',
-          value: 'database'
+  try {
+    while (safetyCounter < 50) {
+      const response = await fetchWithProxy('https://api.notion.com/v1/search', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey.trim()}`,
+          'Notion-Version': NOTION_API_VERSION,
+          'Content-Type': 'application/json'
         },
-        page_size: 100,
-        start_cursor: nextCursor
-      })
-    });
+        body: JSON.stringify({
+          filter: {
+            property: 'object',
+            value: 'database'
+          },
+          page_size: 100,
+          start_cursor: nextCursor
+        })
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Notion Search API Error: ${response.status} - ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = `Notion Search API Error: ${response.status}`;
+        
+        if (response.status === 401) {
+          errorMessage = 'Invalid Notion API key. Please check your API key in Settings.';
+        } else if (response.status === 403) {
+          errorMessage = 'API key does not have permission to search databases. Please check your Notion integration permissions.';
+        } else if (errorText) {
+          try {
+            const errorJson = JSON.parse(errorText);
+            errorMessage += ` - ${errorJson.message || errorText}`;
+          } catch {
+            errorMessage += ` - ${errorText}`;
+          }
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      const results = data.results || [];
+      allResults.push(...results);
+
+      if (!data.has_more || !data.next_cursor) {
+        break;
+      }
+
+      nextCursor = data.next_cursor;
+      safetyCounter += 1;
     }
-
-    const data = await response.json();
-    const results = data.results || [];
-    allResults.push(...results);
-
-    if (!data.has_more || !data.next_cursor) {
-      break;
+  } catch (error) {
+    // Handle network errors
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      throw new Error('Network error: Unable to connect to Notion API. Please check your internet connection and try again.');
     }
-
-    nextCursor = data.next_cursor;
-    safetyCounter += 1;
+    // Re-throw other errors
+    throw error;
   }
 
   return allResults;
@@ -371,6 +401,17 @@ export const discoverDatabases = async (apiKey) => {
  * @returns {Promise<Object>} Proposal with auto-accept, warnings, and blocks
  */
 export const prepareDatabaseMapping = async (apiKey, previousFingerprints = {}) => {
+  // Validate API key before making requests
+  if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') {
+    throw new Error('Notion API key is required. Please enter your API key in Settings.');
+  }
+
+  // Basic format validation (Notion API keys start with 'secret_')
+  const trimmedKey = apiKey.trim();
+  if (!trimmedKey.startsWith('secret_') && trimmedKey.length < 20) {
+    throw new Error('Invalid Notion API key format. API keys should start with "secret_" and be at least 20 characters long.');
+  }
+
   const discovery = await discoverDatabases(apiKey);
   
   const autoAccept = {}; // Domain → Database ID(s) - confidence ≥ 0.7, single DB per domain

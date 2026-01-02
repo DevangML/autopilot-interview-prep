@@ -12,9 +12,10 @@ import { WorkUnit } from './components/WorkUnit.jsx';
 import { UpgradeFlow } from './components/UpgradeFlow.jsx';
 import { orchestrateSession } from './core/sessionOrchestrator.js';
 import { generateContent } from './services/gemini.js';
-import { prepareDatabaseMapping } from './services/notionDiscovery.js';
+import { prepareDatabaseMapping, discoverDatabases, searchAllDatabases, classifyDatabase } from './services/notionDiscovery.js';
 import { DatabaseMappingConfirmation } from './components/DatabaseMappingConfirmation.jsx';
 import { AttemptsDatabaseSetup } from './components/AttemptsDatabaseSetup.jsx';
+import { addItemRelationToAttemptsDB } from './services/notion.js';
 import { useAttempts } from './hooks/useAttempts.js';
 
 function InterviewPrepApp() {
@@ -84,6 +85,9 @@ function InterviewPrepApp() {
           if (err.message.includes('No attempts database found') || err.message.includes('attempts database')) {
             setShowAttemptsSetup(true);
             setAttemptsSetupError(err.message);
+          } else if (err.message.includes('API key') || err.message.includes('Invalid') || err.message.includes('Network error')) {
+            // Show clear error for API key or network issues
+            setError(err.message);
           } else {
             setError(`Database discovery failed: ${err.message}`);
           }
@@ -189,25 +193,68 @@ function InterviewPrepApp() {
           <div className="overflow-y-auto flex-1">
             <AttemptsDatabaseSetup
               apiKey={config.notionKey}
-              onDatabaseCreated={(databaseId) => {
+              onDatabaseCreated={async (databaseId) => {
                 updateConfig({ attemptsDatabaseId: databaseId });
                 setShowAttemptsSetup(false);
                 setAttemptsSetupError(null);
-                // Trigger database discovery again
-                const previousFingerprints = JSON.parse(
-                  localStorage.getItem('notionSchemaFingerprints') || '{}'
-                );
-                prepareDatabaseMapping(config.notionKey, previousFingerprints)
-                  .then(({ proposal, discovery }) => {
-                    setDiscoveryData(discovery);
-                    setDatabaseMapping(proposal.autoAccept);
-                    if (proposal.attemptsDatabase) {
-                      updateConfig({ attemptsDatabaseId: proposal.attemptsDatabase.id });
+                
+                try {
+                  const previousFingerprints = JSON.parse(
+                    localStorage.getItem('notionSchemaFingerprints') || '{}'
+                  );
+                  
+                  // Step 1: Discover learning databases (this will fail on attempts DB check, but we can get learning sheets)
+                  let learningDatabases = [];
+                  try {
+                    const { discovery } = await prepareDatabaseMapping(config.notionKey, previousFingerprints);
+                    learningDatabases = discovery.learningSheets || [];
+                  } catch (discoveryError) {
+                    // Discovery failed because attempts DB doesn't have Item relation yet
+                    // Try to get learning databases directly
+                    const allDBs = await searchAllDatabases(config.notionKey);
+                    learningDatabases = allDBs
+                      .map(db => classifyDatabase(db))
+                      .filter(db => db.isLearningSheet && !db.isAttemptsDB);
+                  }
+                  
+                  // Step 2: Add Item relation if we have a learning database
+                  if (learningDatabases.length > 0) {
+                    const firstLearningDB = learningDatabases[0];
+                    try {
+                      await addItemRelationToAttemptsDB(
+                        config.notionKey,
+                        databaseId,
+                        firstLearningDB.id
+                      );
+                    } catch (relationError) {
+                      console.warn('Failed to add Item relation:', relationError);
+                      // Non-fatal - user can add it manually later
                     }
-                  })
-                  .catch(err => {
-                    setError(`Database discovery failed: ${err.message}`);
+                  }
+                  
+                  // Step 3: Now trigger full discovery again (should work now)
+                  const { proposal, discovery: fullDiscovery } = await prepareDatabaseMapping(
+                    config.notionKey,
+                    previousFingerprints
+                  );
+                  
+                  setDiscoveryData(fullDiscovery);
+                  setDatabaseMapping(proposal.autoAccept);
+                  if (proposal.attemptsDatabase) {
+                    updateConfig({ attemptsDatabaseId: proposal.attemptsDatabase.id });
+                  }
+                  
+                  // Store fingerprints
+                  const fingerprints = { ...previousFingerprints };
+                  fullDiscovery.all?.forEach(db => {
+                    fingerprints[db.id] = db.schemaFingerprint;
                   });
+                  localStorage.setItem('notionSchemaFingerprints', JSON.stringify(fingerprints));
+                } catch (err) {
+                  console.error('Post-creation setup failed:', err);
+                  // Database was created successfully, but setup failed
+                  setError(`Database created successfully! However, some setup steps failed: ${err.message}. You may need to manually add the Item relation property.`);
+                }
               }}
               onCancel={() => {
                 setShowAttemptsSetup(false);

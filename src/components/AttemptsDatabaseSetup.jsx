@@ -95,13 +95,14 @@ export const AttemptsDatabaseSetup = ({ apiKey, onDatabaseCreated, onCancel }) =
       <div className="p-3 bg-white/5 rounded-lg border border-white/10">
         <div className="text-xs font-semibold text-gray-400 mb-2 uppercase">What Will Be Created</div>
         <div className="text-xs text-gray-300 space-y-1">
-          <div>• <strong>Item</strong> - Relation to your learning databases</div>
           <div>• <strong>Result</strong> - Select (Solved, Partial, Failed, Skipped)</div>
           <div>• <strong>Time Spent</strong> - Number field</div>
+          <div>• <strong>Time Spent (min)</strong> - Number field</div>
           <div>• <strong>Sheet</strong> - Domain selection (DSA, OS, DBMS, etc.)</div>
           <div>• <strong>Confidence</strong> - High, Medium, Low</div>
           <div>• <strong>Hint Used</strong> - Checkbox</div>
           <div>• <strong>Mistake Tags</strong> - Multi-select</div>
+          <div className="text-gray-500 text-[10px] mt-2">Note: <strong>Item</strong> relation will be added automatically after your learning databases are discovered.</div>
         </div>
       </div>
 

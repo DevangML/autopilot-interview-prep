@@ -3,6 +3,8 @@
  * Zero-trust data mutation: all user data changes require explicit confirmation
  */
 
+import { fetchWithProxy } from '../utils/fetchWithProxy.js';
+
 const NOTION_API_VERSION = '2022-06-28';
 
 /**
@@ -13,7 +15,7 @@ const NOTION_API_VERSION = '2022-06-28';
  * @returns {Promise<Array>} Database items
  */
 export const fetchDatabaseItems = async (apiKey, databaseId, filter = null) => {
-  const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+  const response = await fetchWithProxy(`https://api.notion.com/v1/databases/${databaseId}/query`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -42,7 +44,7 @@ export const fetchDatabaseItems = async (apiKey, databaseId, filter = null) => {
  * @returns {Promise<Object>} Database schema
  */
 export const getDatabaseSchema = async (apiKey, databaseId) => {
-  const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}`, {
+  const response = await fetchWithProxy(`https://api.notion.com/v1/databases/${databaseId}`, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -142,7 +144,7 @@ export const applySchemaUpgrade = async (apiKey, databaseId, columnsToAdd) => {
     }
   });
 
-  const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}`, {
+  const response = await fetchWithProxy(`https://api.notion.com/v1/databases/${databaseId}`, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -169,7 +171,7 @@ export const applySchemaUpgrade = async (apiKey, databaseId, columnsToAdd) => {
  */
 export const prepareDataUpdate = async (apiKey, pageId, proposedChanges) => {
   // Fetch current page to show diff
-  const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+  const response = await fetchWithProxy(`https://api.notion.com/v1/pages/${pageId}`, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -211,7 +213,7 @@ export const prepareDataUpdate = async (apiKey, pageId, proposedChanges) => {
  * @returns {Promise<Object>} Updated page
  */
 export const applyDataUpdate = async (apiKey, pageId, properties) => {
-  const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+  const response = await fetchWithProxy(`https://api.notion.com/v1/pages/${pageId}`, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -287,7 +289,7 @@ export const createAttempt = async (apiKey, attemptsDatabaseId, attemptData, ava
     properties['Hint Used'] = { checkbox: attemptData.hintUsed };
   }
 
-  const response = await fetch('https://api.notion.com/v1/pages', {
+  const response = await fetchWithProxy('https://api.notion.com/v1/pages', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -309,9 +311,80 @@ export const createAttempt = async (apiKey, attemptsDatabaseId, attemptData, ava
 };
 
 /**
+ * Adds Item relation property to attempts database after creation
+ * @param {string} apiKey - Notion API key
+ * @param {string} attemptsDatabaseId - Attempts database ID
+ * @param {string} targetDatabaseId - Target database ID to link to (first learning database)
+ * @returns {Promise<Object>} Updated database
+ */
+export const addItemRelationToAttemptsDB = async (apiKey, attemptsDatabaseId, targetDatabaseId) => {
+  const response = await fetchWithProxy(`https://api.notion.com/v1/databases/${attemptsDatabaseId}`, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Notion-Version': NOTION_API_VERSION,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      properties: {
+        'Item': {
+          relation: {
+            database_id: targetDatabaseId,
+            type: 'single_property'
+          }
+        }
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to add Item relation: ${response.status} - ${errorText}`);
+  }
+
+  return await response.json();
+};
+
+/**
+ * Finds a page in the workspace to use as parent for database creation
+ * @param {string} apiKey - Notion API key
+ * @returns {Promise<string>} Page ID
+ */
+const findWorkspacePage = async (apiKey) => {
+  const response = await fetchWithProxy('https://api.notion.com/v1/search', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Notion-Version': NOTION_API_VERSION,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      filter: {
+        property: 'object',
+        value: 'page'
+      },
+      page_size: 1
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to find a workspace page to use as parent');
+  }
+
+  const data = await response.json();
+  const pages = data.results || [];
+  
+  if (pages.length === 0) {
+    throw new Error('No pages found in workspace. Please create a page in Notion first, then try again.');
+  }
+
+  return pages[0].id;
+};
+
+/**
  * Creates an attempts database in Notion (SYSTEM-OWNED, no confirmation needed)
  * @param {string} apiKey - Notion API key
- * @param {string} parentPageId - Optional parent page ID (creates in root if not provided)
+ * @param {string} parentPageId - Optional parent page ID (auto-finds one if not provided)
  * @returns {Promise<Object>} Created database with ID
  */
 export const createAttemptsDatabase = async (apiKey, parentPageId = null) => {
@@ -323,12 +396,12 @@ export const createAttemptsDatabase = async (apiKey, parentPageId = null) => {
   ];
 
   const properties = {
-    'Item': {
-      relation: {
-        database_id: null, // Will be set when linking to learning databases
-        type: 'single_property'
-      }
+    // Title property is required for all Notion databases
+    'Name': {
+      title: {}
     },
+    // Note: Item relation will be added later after discovering learning databases
+    // We can't create a relation without a target database_id
     'Result': {
       select: {
         options: [
@@ -364,7 +437,7 @@ export const createAttemptsDatabase = async (apiKey, parentPageId = null) => {
           { name: 'Aptitude', color: 'yellow' },
           { name: 'Puzzles', color: 'red' },
           { name: 'LLD', color: 'green' },
-          { name: 'HLD', color: 'cyan' }
+          { name: 'HLD', color: 'blue' }
         ]
       }
     },
@@ -387,15 +460,23 @@ export const createAttemptsDatabase = async (apiKey, parentPageId = null) => {
     }
   };
 
+  // Notion API requires a parent page - if not provided, find one automatically
+  let finalParentPageId = parentPageId;
+  if (!finalParentPageId) {
+    try {
+      finalParentPageId = await findWorkspacePage(apiKey);
+    } catch (error) {
+      throw new Error(`Could not find a page to use as parent: ${error.message}. Please create a page in your Notion workspace first, or provide a parent page ID.`);
+    }
+  }
+
   const requestBody = {
-    parent: parentPageId 
-      ? { page_id: parentPageId }
-      : { type: 'workspace', workspace: true },
+    parent: { page_id: finalParentPageId },
     title: databaseTitle,
     properties
   };
 
-  const response = await fetch('https://api.notion.com/v1/databases', {
+  const response = await fetchWithProxy('https://api.notion.com/v1/databases', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
