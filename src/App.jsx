@@ -8,17 +8,21 @@ import { useState, useEffect } from 'react';
 import { BrainCircuit, Settings, Clock, CheckCircle } from 'lucide-react';
 import { useSession } from './hooks/useSession.js';
 import { useConfig } from './hooks/useConfig.js';
+import { useAttempts } from './hooks/useAttempts.js';
 import { SessionStarter } from './components/SessionStarter.jsx';
 import { WorkUnit } from './components/WorkUnit.jsx';
 import { UpgradeFlow } from './components/UpgradeFlow.jsx';
 import { orchestrateSession } from './core/sessionOrchestrator.js';
 import { generateContent } from './services/gemini.js';
 import { formatDuration } from './utils/index.js';
-import { composeSession } from './core/session.js';
 
 function App() {
   const { config, isLoading: configLoading, isConfigured, updateConfig } = useConfig();
   const { session, isActive, currentUnit, startSession, completeUnit, endSession } = useSession();
+  const { loadAttempts, recordAttempt, getAttemptsData } = useAttempts(
+    config.notionKey,
+    config.attemptsDatabaseId
+  );
   const [showSettings, setShowSettings] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [isOrchestrating, setIsOrchestrating] = useState(false);
@@ -30,6 +34,12 @@ function App() {
       setShowSettings(true);
     }
   }, [configLoading, isConfigured]);
+
+  useEffect(() => {
+    if (config.notionKey && config.attemptsDatabaseId) {
+      loadAttempts();
+    }
+  }, [config.notionKey, config.attemptsDatabaseId, loadAttempts]);
 
   // Handle session start
   const handleStartSession = async ({ totalMinutes, focusMode }) => {
@@ -45,7 +55,8 @@ function App() {
         },
         totalMinutes,
         focusMode,
-        attemptsData: {} // TODO: Load from attempts database
+        getAttemptsData,
+        now: Date.now()
       });
 
       // Start session with composed units
@@ -62,10 +73,23 @@ function App() {
   };
 
   // Handle unit completion
-  const handleUnitComplete = async (output) => {
+  const handleUnitComplete = async (completion) => {
     try {
-      completeUnit(output);
-      // TODO: Create attempt record
+      const normalized = typeof completion === 'string'
+        ? { output: completion, recap: null, usedRescue: false }
+        : completion;
+      
+      completeUnit(normalized);
+      
+      if (currentUnit?.item?.id) {
+        await recordAttempt({
+          itemId: currentUnit.item.id,
+          sheet: currentUnit.item.domain || 'Unknown',
+          result: 'Solved',
+          timeSpent: currentUnit.timeMinutes || 0,
+          hintUsed: Boolean(normalized.usedRescue)
+        });
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -92,10 +116,11 @@ function App() {
           </div>
           <div className="overflow-y-auto flex-1 space-y-5">
             {[
-              { key: 'notionKey', label: 'Notion API Key', type: 'password' },
-              { key: 'databaseId', label: 'Notion Database ID', type: 'text' },
-              { key: 'geminiKey', label: 'Gemini API Key', type: 'password' }
-            ].map(({ key, label, type }) => (
+            { key: 'notionKey', label: 'Notion API Key', type: 'password' },
+            { key: 'databaseId', label: 'Notion Database ID', type: 'text' },
+            { key: 'attemptsDatabaseId', label: 'Attempts Database ID', type: 'text' },
+            { key: 'geminiKey', label: 'Gemini API Key', type: 'password' }
+          ].map(({ key, label, type }) => (
               <div key={key}>
                 <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
                   {label}

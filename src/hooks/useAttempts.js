@@ -3,8 +3,8 @@
  * Manages attempt/activity tracking (system-owned data)
  */
 
-import { useState, useEffect } from 'react';
-import { createAttempt, fetchDatabaseItems } from '../services/notion.js';
+import { useState, useEffect, useCallback } from 'react';
+import { createAttempt, fetchDatabaseItems, getDatabaseSchema } from '../services/notion.js';
 
 /**
  * Hook for managing attempts
@@ -14,6 +14,16 @@ import { createAttempt, fetchDatabaseItems } from '../services/notion.js';
 export const useAttempts = (apiKey, attemptsDatabaseId) => {
   const [attempts, setAttempts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [schemaProperties, setSchemaProperties] = useState(null);
+
+  const loadSchema = useCallback(async () => {
+    if (!apiKey || !attemptsDatabaseId) return null;
+    const schema = await getDatabaseSchema(apiKey, attemptsDatabaseId);
+    const propNames = Object.keys(schema.properties || {});
+    const propSet = new Set(propNames);
+    setSchemaProperties(propSet);
+    return propSet;
+  }, [apiKey, attemptsDatabaseId]);
 
   // Load recent attempts
   const loadAttempts = async (itemId = null) => {
@@ -35,12 +45,19 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
     }
   };
 
+  useEffect(() => {
+    loadSchema().catch(error => {
+      console.error('Failed to load attempts schema:', error);
+    });
+  }, [loadSchema]);
+
   // Create new attempt (system-owned, no confirmation needed)
   const recordAttempt = async (attemptData) => {
     if (!apiKey || !attemptsDatabaseId) return;
     
     try {
-      const created = await createAttempt(apiKey, attemptsDatabaseId, attemptData);
+      const schema = schemaProperties || await loadSchema();
+      const created = await createAttempt(apiKey, attemptsDatabaseId, attemptData, schema);
       setAttempts(prev => [created, ...prev]);
       return created;
     } catch (error) {
@@ -75,6 +92,7 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
     const times = recent
       .map(a => a.properties?.['Time Spent (min)']?.number)
       .filter(t => t !== undefined);
+    const mistakes = recent.filter(a => (a.properties?.['Mistake Tags']?.multi_select || []).length > 0);
 
     return {
       successRate: solved.length / recent.length,
@@ -84,7 +102,7 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
       avgTimeToSolve: times.length > 0 
         ? times.reduce((a, b) => a + b, 0) / times.length 
         : 30,
-      mistakeRecurrence: 0 // TODO: Calculate from mistake tags
+      mistakeRecurrence: recent.length > 0 ? mistakes.length / recent.length : 0
     };
   };
 
@@ -207,4 +225,3 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
     getAttemptsData
   };
 };
-

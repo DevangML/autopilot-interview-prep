@@ -59,13 +59,47 @@ export const composeSession = ({
   const totalMin = allocation.review.min + allocation.core.min + allocation.breadth.min;
   const totalMax = allocation.review.max + allocation.core.max + allocation.breadth.max;
   
-  const scale = totalMinutes <= totalMin ? 1 : 
-                totalMinutes >= totalMax ? 1 : 
+  const scale = totalMinutes <= totalMin ? 0 :
+                totalMinutes >= totalMax ? 1 :
                 (totalMinutes - totalMin) / (totalMax - totalMin);
   
-  const reviewTime = Math.round(allocation.review.min + (allocation.review.max - allocation.review.min) * scale);
-  const coreTime = Math.round(allocation.core.min + (allocation.core.max - allocation.core.min) * scale);
-  const breadthTime = totalMinutes - reviewTime - coreTime; // Ensure exact total
+  const reviewBase = allocation.review.min + (allocation.review.max - allocation.review.min) * scale;
+  const coreBase = allocation.core.min + (allocation.core.max - allocation.core.min) * scale;
+  const breadthBase = allocation.breadth.min + (allocation.breadth.max - allocation.breadth.min) * scale;
+  const baseTotal = reviewBase + coreBase + breadthBase;
+  const scaleToTotal = baseTotal > 0 ? totalMinutes / baseTotal : 1;
+  
+  let reviewTime = Math.round(reviewBase * scaleToTotal);
+  let coreTime = Math.round(coreBase * scaleToTotal);
+  let breadthTime = totalMinutes - reviewTime - coreTime; // Ensure exact total
+  
+  // Adjust for rounding so breadth stays within its range when possible
+  if (breadthTime < allocation.breadth.min) {
+    const deficit = allocation.breadth.min - breadthTime;
+    const coreReduce = Math.min(deficit, Math.max(0, coreTime - allocation.core.min));
+    coreTime -= coreReduce;
+    const remaining = deficit - coreReduce;
+    const reviewReduce = Math.min(remaining, Math.max(0, reviewTime - allocation.review.min));
+    reviewTime -= reviewReduce;
+    breadthTime = totalMinutes - reviewTime - coreTime;
+  } else if (breadthTime > allocation.breadth.max) {
+    const excess = breadthTime - allocation.breadth.max;
+    const coreGrow = Math.min(excess, Math.max(0, allocation.core.max - coreTime));
+    coreTime += coreGrow;
+    const remaining = excess - coreGrow;
+    const reviewGrow = Math.min(remaining, Math.max(0, allocation.review.max - reviewTime));
+    reviewTime += reviewGrow;
+    breadthTime = totalMinutes - reviewTime - coreTime;
+  }
+
+  if (breadthTime < 0) {
+    const deficit = Math.abs(breadthTime);
+    const coreReduce = Math.min(deficit, coreTime);
+    coreTime -= coreReduce;
+    const remaining = deficit - coreReduce;
+    reviewTime = Math.max(0, reviewTime - remaining);
+    breadthTime = totalMinutes - reviewTime - coreTime;
+  }
   
   return {
     totalMinutes,
@@ -83,10 +117,9 @@ export const composeSession = ({
       },
       {
         type: 'breadth',
-        timeMinutes: Math.max(5, breadthTime), // Ensure minimum breadth
+        timeMinutes: breadthTime,
         ...breadthUnit
       }
     ]
   };
 };
-

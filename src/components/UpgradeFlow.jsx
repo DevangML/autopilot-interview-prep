@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, X, Edit } from 'lucide-react';
-import { prepareSchemaUpgrade, applySchemaUpgrade, prepareDataUpdate, applyDataUpdate } from '../services/notion.js';
+import { prepareSchemaUpgrade, applySchemaUpgrade } from '../services/notion.js';
 
 export const UpgradeFlow = ({ apiKey, databaseId, onComplete, onCancel }) => {
   const [plan, setPlan] = useState(null);
@@ -144,4 +144,3 @@ export const UpgradeFlow = ({ apiKey, databaseId, onComplete, onCancel }) => {
     </div>
   );
 };
-

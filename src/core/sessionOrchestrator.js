@@ -10,8 +10,6 @@ import { getUnitTypesForDomain, UNIT_TYPES } from './units.js';
 import { getDefaultDomainMode } from './domainMode.js';
 import { fetchDatabaseItems } from '../services/notion.js';
 
-// Note: This is a placeholder - in production, you'd load attempts from the attempts database
-
 /**
  * Orchestrates a daily session
  * @param {Object} params
@@ -27,26 +25,31 @@ export const orchestrateSession = async ({
   databases,
   totalMinutes,
   focusMode,
-  attemptsData = {}
+  attemptsData = {},
+  getAttemptsData,
+  fetchItems = fetchDatabaseItems,
+  now = Date.now()
 }) => {
   // Fetch items from all databases
   // Support multiple databases per domain (arrays) with deterministic merge order
+  const domainEntries = Object.entries(databases).sort(([a], [b]) => a.localeCompare(b));
   const allItems = await Promise.all(
-    Object.entries(databases).flatMap(([domain, dbIds]) => {
+    domainEntries.flatMap(([domain, dbIds]) => {
       // Handle both single ID and array of IDs
       const ids = Array.isArray(dbIds) ? dbIds : [dbIds];
       
-      // Deterministic merge order: CPRD schema > item count > database ID
+      // Deterministic merge order: item count (desc) > database ID (asc)
       // First, fetch all databases to get metadata
       return Promise.all(ids.map(async (dbId) => {
-        const items = await fetchDatabaseItems(apiKey, dbId, {
+        const items = await fetchItems(apiKey, dbId, {
           property: 'Completed',
           checkbox: { equals: false }
         });
+        const stableItems = [...items].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
         return {
           dbId,
-          items,
-          itemCount: items.length
+          items: stableItems,
+          itemCount: stableItems.length
         };
       })).then(dbResults => {
         // Sort by: CPRD presence (hasCPRD), item count (desc), database ID (asc)
@@ -73,6 +76,11 @@ export const orchestrateSession = async ({
     })
   ).then(results => results.flat());
 
+  const attemptsContext = typeof getAttemptsData === 'function'
+    ? getAttemptsData(allItems)
+    : attemptsData;
+  const itemAttempts = attemptsContext?.itemData || attemptsContext || {};
+
   // Calculate coverage debt for each domain
   const domainDebts = {};
   Object.keys(databases).forEach(domain => {
@@ -82,7 +90,7 @@ export const orchestrateSession = async ({
     
     domainDebts[domain] = calculateCoverageDebt({
       weeklyFloorMinutes: getDefaultWeeklyFloor(domainType),
-      minutesDoneLast7d: attemptsData[domain]?.minutesLast7d || 0,
+      minutesDoneLast7d: attemptsContext?.domainData?.[domain]?.minutesLast7d || 0,
       remainingUnits: domainItems.length - completed.length,
       completedUnits: completed.length
     });
@@ -92,10 +100,10 @@ export const orchestrateSession = async ({
   const reviewCandidates = allItems
     .filter(item => {
       // Filter for review-worthy items (recently completed, needs review)
-      const lastAttempt = attemptsData[item.id]?.lastAttempt;
+      const lastAttempt = itemAttempts[item.id]?.lastAttempt;
       if (!lastAttempt) return false;
       
-      const daysSince = (Date.now() - lastAttempt) / (1000 * 60 * 60 * 24);
+      const daysSince = (now - lastAttempt) / (1000 * 60 * 60 * 24);
       return daysSince >= 1 && daysSince <= 7; // Review window
     })
     .sort((a, b) => {
@@ -133,18 +141,18 @@ export const orchestrateSession = async ({
   let readinessData = {};
   let attemptsDataForPrioritization = {};
   
-  if (attemptsData.itemData) {
+  if (attemptsContext?.itemData) {
     // New structure from getAttemptsData()
-    attemptsDataForPrioritization = attemptsData.itemData;
-    readinessData = attemptsData.itemReadinessMap || {};
+    attemptsDataForPrioritization = attemptsContext.itemData;
+    readinessData = attemptsContext.itemReadinessMap || {};
     
     // For coding domains, use pattern-level readiness if available
-    if (coreDomainType === DOMAIN_TYPES.CODING && attemptsData.getPatternReadiness) {
+    if (coreDomainType === DOMAIN_TYPES.CODING && attemptsContext.getPatternReadiness) {
       coreCandidates.forEach(item => {
         const pattern = item.properties?.['Primary Pattern']?.rich_text?.[0]?.plain_text ||
                        item.properties?.['Pattern']?.rich_text?.[0]?.plain_text;
         if (pattern) {
-          const patternReadiness = attemptsData.getPatternReadiness(pattern);
+          const patternReadiness = attemptsContext.getPatternReadiness(pattern);
           if (patternReadiness) {
             // Use pattern readiness for this item
             readinessData[item.id] = patternReadiness;
@@ -209,4 +217,3 @@ export const orchestrateSession = async ({
     }
   };
 };
-

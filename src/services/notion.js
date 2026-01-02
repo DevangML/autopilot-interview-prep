@@ -230,16 +230,56 @@ export const applyDataUpdate = async (apiKey, pageId, properties) => {
  * @param {Object} attemptData - Attempt data
  * @returns {Promise<Object>} Created attempt
  */
-export const createAttempt = async (apiKey, attemptsDatabaseId, attemptData) => {
-  const properties = {
-    'Item': { relation: [{ id: attemptData.itemId }] },
-    'Sheet': { select: { name: attemptData.sheet } },
-    'Result': { select: { name: attemptData.result } },
-    'Confidence': { select: { name: attemptData.confidence } },
-    'Mistake Tags': { multi_select: attemptData.mistakeTags?.map(tag => ({ name: tag })) || [] },
-    'Time Spent (min)': { number: attemptData.timeSpent },
-    'Hint Used': { checkbox: attemptData.hintUsed || false }
+export const createAttempt = async (apiKey, attemptsDatabaseId, attemptData, availableProperties = null) => {
+  const hasProperty = (name) => {
+    if (!availableProperties) {
+      return name === 'Item' || name === 'Result' || name === 'Time Spent (min)' || name === 'Time Spent';
+    }
+    return availableProperties.has(name);
   };
+
+  if (!attemptData?.itemId) {
+    throw new Error('Attempt creation requires itemId.');
+  }
+
+  const properties = {};
+
+  if (!hasProperty('Item')) {
+    throw new Error('Attempts database missing required Item relation property.');
+  }
+  properties.Item = { relation: [{ id: attemptData.itemId }] };
+
+  if (hasProperty('Sheet') && attemptData.sheet) {
+    properties.Sheet = { select: { name: attemptData.sheet } };
+  }
+
+  if (!hasProperty('Result')) {
+    throw new Error('Attempts database missing required Result select property.');
+  }
+  properties.Result = { select: { name: attemptData.result || 'Solved' } };
+
+  if (hasProperty('Confidence') && attemptData.confidence) {
+    properties.Confidence = { select: { name: attemptData.confidence } };
+  }
+
+  if (hasProperty('Mistake Tags') && attemptData.mistakeTags?.length) {
+    properties['Mistake Tags'] = {
+      multi_select: attemptData.mistakeTags.map(tag => ({ name: tag }))
+    };
+  }
+
+  const timePropName = hasProperty('Time Spent (min)')
+    ? 'Time Spent (min)'
+    : hasProperty('Time Spent')
+      ? 'Time Spent'
+      : null;
+  if (timePropName && typeof attemptData.timeSpent === 'number') {
+    properties[timePropName] = { number: attemptData.timeSpent };
+  }
+
+  if (hasProperty('Hint Used') && typeof attemptData.hintUsed === 'boolean') {
+    properties['Hint Used'] = { checkbox: attemptData.hintUsed };
+  }
 
   const response = await fetch('https://api.notion.com/v1/pages', {
     method: 'POST',
@@ -261,4 +301,3 @@ export const createAttempt = async (apiKey, attemptsDatabaseId, attemptData) => 
 
   return await response.json();
 };
-

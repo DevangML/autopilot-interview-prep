@@ -13,6 +13,8 @@ export const WorkUnit = ({ unit, onComplete, geminiService, config }) => {
   const [isStuck, setIsStuck] = useState(false);
   const [stuckResponse, setStuckResponse] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [recap, setRecap] = useState('');
+  const [requiresRecap, setRequiresRecap] = useState(false);
 
   const unitConfig = UNIT_CONFIG[unit.unitType] || {};
   const stuckActions = getStuckActions(unit.unitType);
@@ -28,6 +30,9 @@ export const WorkUnit = ({ unit, onComplete, geminiService, config }) => {
       );
       setStuckResponse(response);
       setIsStuck(true);
+      if (response.requiresRecap) {
+        setRequiresRecap(true);
+      }
     } catch (error) {
       alert(`Error: ${error.message}`);
     } finally {
@@ -40,7 +45,11 @@ export const WorkUnit = ({ unit, onComplete, geminiService, config }) => {
       alert('Please provide output to complete this unit');
       return;
     }
-    onComplete(output);
+    if (requiresRecap && !recap.trim()) {
+      alert('Please add a recap to complete this unit');
+      return;
+    }
+    onComplete({ output, recap: recap || null, usedRescue: requiresRecap });
   };
 
   return (
@@ -78,6 +87,20 @@ export const WorkUnit = ({ unit, onComplete, geminiService, config }) => {
             onChange={(e) => setOutput(e.target.value)}
             placeholder={`Enter your ${unitConfig.outputType} here...`}
             className="w-full h-32 bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-blue-500/40 outline-none resize-none"
+          />
+        </div>
+      )}
+
+      {requiresRecap && (
+        <div className="mb-4">
+          <label className="block text-xs font-semibold text-amber-300 mb-2 uppercase">
+            Recap (Explain Back)
+          </label>
+          <textarea
+            value={recap}
+            onChange={(e) => setRecap(e.target.value)}
+            placeholder="Explain the solution back in your own words..."
+            className="w-full h-28 bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-3 text-sm text-white placeholder-amber-200/60 focus:border-amber-400/60 outline-none resize-none"
           />
         </div>
       )}
@@ -124,7 +147,10 @@ export const WorkUnit = ({ unit, onComplete, geminiService, config }) => {
         )}
         <button
           onClick={handleComplete}
-          disabled={!output.trim() && unitConfig.requiresOutput}
+          disabled={
+            (!output.trim() && unitConfig.requiresOutput) ||
+            (requiresRecap && !recap.trim())
+          }
           className="py-2 px-4 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-lg font-medium text-white hover:from-emerald-400 hover:to-teal-500 transition-all disabled:opacity-50 disabled:grayscale flex items-center gap-2"
         >
           <CheckCircle className="w-4 h-4" />
@@ -134,4 +160,3 @@ export const WorkUnit = ({ unit, onComplete, geminiService, config }) => {
     </div>
   );
 };
-

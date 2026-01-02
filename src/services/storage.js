@@ -11,16 +11,18 @@ export const getConfig = async () => {
     return {
       notionKey: import.meta.env.VITE_NOTION_KEY || '',
       databaseId: import.meta.env.VITE_NOTION_DATABASE_ID || '',
-      geminiKey: import.meta.env.VITE_GEMINI_KEY || ''
+      geminiKey: import.meta.env.VITE_GEMINI_KEY || '',
+      attemptsDatabaseId: ''
     };
   }
 
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['notionKey', 'databaseId', 'geminiKey'], (result) => {
+    chrome.storage.sync.get(['notionKey', 'databaseId', 'geminiKey', 'attemptsDatabaseId'], (result) => {
       resolve({
         notionKey: import.meta.env.VITE_NOTION_KEY || result.notionKey || '',
         databaseId: import.meta.env.VITE_NOTION_DATABASE_ID || result.databaseId || '',
-        geminiKey: import.meta.env.VITE_GEMINI_KEY || result.geminiKey || ''
+        geminiKey: import.meta.env.VITE_GEMINI_KEY || result.geminiKey || '',
+        attemptsDatabaseId: result.attemptsDatabaseId || ''
       });
     });
   });
@@ -71,4 +73,3 @@ export const clearActiveSession = async () => {
     chrome.storage.local.remove(['activeSession'], () => resolve());
   });
 };
-

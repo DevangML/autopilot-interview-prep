@@ -167,6 +167,13 @@ export const classifyDatabase = (database) => {
   // For ambiguous names, schema signals dominate
   const isAmbiguous = titleLower.includes('interview') || titleLower.includes('prep') || 
                       titleLower.includes('notes') || titleLower.includes('systems');
+
+  // Analyze properties to determine if it's a learning sheet
+  const hasNameProperty = 'Name' in properties || 'Title' in properties || 'Problem' in properties;
+  const hasCompletedProperty = 'Completed' in properties || 'Status' in properties || 'Done' in properties;
+  const hasLinkProperty = 'Link' in properties || 'URL' in properties || 'LeetCode Link' in properties;
+  
+  const isLearningSheet = hasNameProperty && (hasCompletedProperty || hasLinkProperty);
   
   let finalConfidence;
   if (isAmbiguous && schemaConfidence > 0) {
@@ -182,13 +189,6 @@ export const classifyDatabase = (database) => {
   if (hasCPRD && hasDomainTypicalProps && isLearningSheet) {
     finalConfidence = Math.max(0.6, finalConfidence);
   }
-
-  // Analyze properties to determine if it's a learning sheet
-  const hasNameProperty = 'Name' in properties || 'Title' in properties || 'Problem' in properties;
-  const hasCompletedProperty = 'Completed' in properties || 'Status' in properties || 'Done' in properties;
-  const hasLinkProperty = 'Link' in properties || 'URL' in properties || 'LeetCode Link' in properties;
-  
-  const isLearningSheet = hasNameProperty && (hasCompletedProperty || hasLinkProperty);
 
   // Harden attempts database detection - schema signature only
   // Must have ALL three: Item (relation), Result (select), Time Spent (number)
@@ -267,6 +267,7 @@ export const prepareDatabaseMapping = async (apiKey, previousFingerprints = {}) 
   const discovery = await discoverDatabases(apiKey);
   
   const autoAccept = {}; // Domain → Database ID(s) - confidence ≥ 0.7, single DB per domain
+  const autoAcceptDetails = {}; // Domain → Database[] (for UI display)
   const warnings = {};   // Domain → Database[] - confidence 0.4-0.7 or multiple DBs
   const blocks = [];     // Databases that cannot be confidently classified
   
@@ -306,8 +307,23 @@ export const prepareDatabaseMapping = async (apiKey, previousFingerprints = {}) 
   }
   
   // Check for schema fingerprint changes (mandatory re-analysis)
-  const fingerprintChanged = previousFingerprints[attemptsDB.id] && 
-                             previousFingerprints[attemptsDB.id] !== attemptsDB.schemaFingerprint;
+  const fingerprintChanges = [];
+  const relevantDatabases = [
+    ...discovery.learningSheets,
+    ...discovery.attemptsDatabases
+  ];
+  relevantDatabases.forEach(db => {
+    const previous = previousFingerprints[db.id];
+    if (previous && previous !== db.schemaFingerprint) {
+      fingerprintChanges.push({
+        id: db.id,
+        title: db.title,
+        previous,
+        current: db.schemaFingerprint
+      });
+    }
+  });
+  const fingerprintChanged = fingerprintChanges.length > 0;
   
   // Process learning sheets by domain
   Object.entries(discovery.byDomain).forEach(([domain, databases]) => {
@@ -341,6 +357,7 @@ export const prepareDatabaseMapping = async (apiKey, previousFingerprints = {}) 
     if (highConfidence.length === 1) {
       // Single high-confidence DB → auto-accept
       autoAccept[domain] = [highConfidence[0].id];
+      autoAcceptDetails[domain] = [highConfidence[0]];
     } else if (highConfidence.length > 1) {
       // Multiple high-confidence DBs → require confirmation
       warnings[domain] = highConfidence.map(db => ({
@@ -359,10 +376,12 @@ export const prepareDatabaseMapping = async (apiKey, previousFingerprints = {}) 
   return {
     proposal: {
       autoAccept,      // Domain → Database ID[] (arrays for future multi-DB support)
+      autoAcceptDetails,
       warnings,        // Domain → Database[] (requires confirmation)
       blocks,          // Database[] (excluded from mapping)
       attemptsDatabase: attemptsDB,
-      fingerprintChanged
+      fingerprintChanged,
+      fingerprintChanges
     },
     discovery // Full discovery data for UI
   };
@@ -384,4 +403,3 @@ export const getDatabaseMapping = async (apiKey) => {
     proposal // Include full proposal for validation
   };
 };
-

@@ -4,13 +4,30 @@
  * Reuses existing confirmation flow patterns (zero-trust)
  */
 
+import { useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle, X } from 'lucide-react';
 
 export const DatabaseMappingConfirmation = ({ proposal, onConfirm, onCancel }) => {
-  const { autoAccept, warnings, blocks, attemptsDatabase, fingerprintChanged } = proposal;
+  const { autoAccept, autoAcceptDetails, warnings, blocks, attemptsDatabase, fingerprintChanged, fingerprintChanges } = proposal;
 
   const hasWarnings = Object.keys(warnings).length > 0;
   const hasBlocks = blocks.length > 0;
+  const [selectedWarnings, setSelectedWarnings] = useState({});
+
+  const selectionComplete = useMemo(() => {
+    if (!hasWarnings) return true;
+    return Object.keys(warnings).every(domain => (selectedWarnings[domain] || []).length > 0);
+  }, [hasWarnings, warnings, selectedWarnings]);
+
+  const toggleWarningSelection = (domain, dbId) => {
+    setSelectedWarnings(prev => {
+      const current = prev[domain] || [];
+      const next = current.includes(dbId)
+        ? current.filter(id => id !== dbId)
+        : [...current, dbId];
+      return { ...prev, [domain]: next };
+    });
+  };
 
   return (
     <div className="p-6 space-y-4">
@@ -28,8 +45,17 @@ export const DatabaseMappingConfirmation = ({ proposal, onConfirm, onCancel }) =
             <span className="text-xs font-semibold">Schema Changed</span>
           </div>
           <p className="text-xs text-gray-300">
-            Attempts database schema has changed. Re-analysis required.
+            One or more database schemas have changed. Re-analysis required.
           </p>
+          {fingerprintChanges?.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {fingerprintChanges.map(change => (
+                <div key={change.id} className="text-[10px] text-yellow-300">
+                  • {change.title}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -40,7 +66,10 @@ export const DatabaseMappingConfirmation = ({ proposal, onConfirm, onCancel }) =
           <div className="space-y-1">
             {Object.entries(autoAccept).map(([domain, dbIds]) => (
               <div key={domain} className="p-2 bg-green-500/10 rounded text-xs text-gray-300">
-                <div className="font-medium">{domain} → {dbIds.length} database{dbIds.length !== 1 ? 's' : ''}</div>
+                <div className="font-medium">{domain}</div>
+                <div className="text-[10px] text-gray-400">
+                  {(autoAcceptDetails?.[domain] || []).map(db => db.title).join(', ') || dbIds.join(', ')}
+                </div>
               </div>
             ))}
           </div>
@@ -55,16 +84,27 @@ export const DatabaseMappingConfirmation = ({ proposal, onConfirm, onCancel }) =
             {Object.entries(warnings).map(([domain, databases]) => (
               <div key={domain} className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
                 <div className="font-medium text-white text-sm mb-1">{domain}</div>
+                <div className="text-[10px] text-yellow-300 mb-2">Select one or more databases to use</div>
                 <div className="space-y-2">
                   {databases.map(db => (
                     <div key={db.id} className="p-2 bg-white/5 rounded text-xs">
-                      <div className="font-medium text-gray-300 mb-1">{db.title}</div>
-                      <div className="text-gray-400 mb-1">Confidence: {(db.confidence * 100).toFixed(0)}%</div>
-                      {db.warningReason && (
-                        <div className="text-yellow-400 text-[10px] mt-1">
-                          • {db.warningReason}
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={(selectedWarnings[domain] || []).includes(db.id)}
+                          onChange={() => toggleWarningSelection(domain, db.id)}
+                        />
+                        <div className="flex-1">
+                          <div className="font-medium text-gray-300 mb-1">{db.title}</div>
+                          <div className="text-gray-400 mb-1">Confidence: {(db.confidence * 100).toFixed(0)}%</div>
+                          {db.warningReason && (
+                            <div className="text-yellow-400 text-[10px] mt-1">
+                              • {db.warningReason}
+                            </div>
+                          )}
                         </div>
-                      )}
+                      </label>
                     </div>
                   ))}
                 </div>
@@ -111,15 +151,14 @@ export const DatabaseMappingConfirmation = ({ proposal, onConfirm, onCancel }) =
           Cancel
         </button>
         <button
-          onClick={onConfirm}
-          disabled={hasWarnings || hasBlocks} // No implicit acceptance on warnings or blocks
+          onClick={() => onConfirm({ ...autoAccept, ...selectedWarnings })}
+          disabled={!selectionComplete || hasBlocks}
           className="flex-1 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-lg font-medium text-white hover:from-blue-400 hover:to-indigo-500 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
         >
           <CheckCircle className="w-4 h-4" />
-          {hasWarnings ? 'Review Required' : hasBlocks ? 'Cannot Proceed' : 'Confirm Mapping'}
+          {hasBlocks ? 'Cannot Proceed' : 'Confirm Mapping'}
         </button>
       </div>
     </div>
   );
 };
-

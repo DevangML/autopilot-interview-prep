@@ -12,11 +12,14 @@ import { WorkUnit } from './components/WorkUnit.jsx';
 import { UpgradeFlow } from './components/UpgradeFlow.jsx';
 import { orchestrateSession } from './core/sessionOrchestrator.js';
 import { generateContent } from './services/gemini.js';
-import { getDatabaseMapping, prepareDatabaseMapping } from './services/notionDiscovery.js';
+import { prepareDatabaseMapping } from './services/notionDiscovery.js';
 import { DatabaseMappingConfirmation } from './components/DatabaseMappingConfirmation.jsx';
+import { useAttempts } from './hooks/useAttempts.js';
 
 function InterviewPrepApp() {
-  const { config, isLoading: configLoading, isConfigured, updateConfig } = useConfig();
+  const { config, isLoading: configLoading, isConfigured, updateConfig } = useConfig({
+    requiredKeys: ['notionKey', 'geminiKey']
+  });
   const { session, isActive, currentUnit, startSession, completeUnit, endSession } = useSession();
   const [showSettings, setShowSettings] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
@@ -26,6 +29,10 @@ function InterviewPrepApp() {
   const [discoveryData, setDiscoveryData] = useState(null);
   const [mappingProposal, setMappingProposal] = useState(null);
   const [showMappingConfirmation, setShowMappingConfirmation] = useState(false);
+  const { loadAttempts, recordAttempt, getAttemptsData } = useAttempts(
+    config.notionKey,
+    config.attemptsDatabaseId
+  );
 
   // Load database mapping proposal on config change
   useEffect(() => {
@@ -59,9 +66,11 @@ function InterviewPrepApp() {
             setDatabaseMapping(proposal.autoAccept);
             if (proposal.attemptsDatabase) {
               updateConfig({ attemptsDatabaseId: proposal.attemptsDatabase.id });
-              // Store fingerprint for change detection
+              // Store fingerprints for change detection
               const fingerprints = { ...previousFingerprints };
-              fingerprints[proposal.attemptsDatabase.id] = proposal.attemptsDatabase.schemaFingerprint;
+              discovery.all.forEach(db => {
+                fingerprints[db.id] = db.schemaFingerprint;
+              });
               localStorage.setItem('notionSchemaFingerprints', JSON.stringify(fingerprints));
             }
           }
@@ -80,6 +89,13 @@ function InterviewPrepApp() {
     }
   }, [configLoading, isConfigured]);
 
+  // Load attempts data once attempts DB is known
+  useEffect(() => {
+    if (config.notionKey && config.attemptsDatabaseId) {
+      loadAttempts();
+    }
+  }, [config.notionKey, config.attemptsDatabaseId, loadAttempts]);
+
   // Handle session start
   const handleStartSession = async ({ totalMinutes, focusMode }) => {
     if (!databaseMapping || Object.keys(databaseMapping).length === 0) {
@@ -97,7 +113,8 @@ function InterviewPrepApp() {
         databases: databaseMapping, // Auto-discovered mapping
         totalMinutes,
         focusMode,
-        attemptsData: {} // TODO: Load from attempts database
+        getAttemptsData,
+        now: Date.now()
       });
 
       startSession({
@@ -113,10 +130,23 @@ function InterviewPrepApp() {
   };
 
   // Handle unit completion
-  const handleUnitComplete = async (output) => {
+  const handleUnitComplete = async (completion) => {
     try {
-      completeUnit(output);
-      // TODO: Create attempt record
+      const normalized = typeof completion === 'string'
+        ? { output: completion, recap: null, usedRescue: false }
+        : completion;
+      
+      completeUnit(normalized);
+      
+      if (currentUnit?.item?.id) {
+        await recordAttempt({
+          itemId: currentUnit.item.id,
+          sheet: currentUnit.item.domain || 'Unknown',
+          result: 'Solved',
+          timeSpent: currentUnit.timeMinutes || 0,
+          hintUsed: Boolean(normalized.usedRescue)
+        });
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -150,21 +180,17 @@ function InterviewPrepApp() {
           <div className="overflow-y-auto flex-1">
             <DatabaseMappingConfirmation
               proposal={mappingProposal}
-              onConfirm={() => {
-                // Accept auto-accepted + first warning DB per domain
-                const confirmed = { ...mappingProposal.autoAccept };
-                Object.entries(mappingProposal.warnings).forEach(([domain, dbs]) => {
-                  confirmed[domain] = [dbs[0].id]; // Take first DB from warnings
-                });
-                setDatabaseMapping(confirmed);
+              onConfirm={(confirmedMapping) => {
+                setDatabaseMapping(confirmedMapping);
                 if (mappingProposal.attemptsDatabase) {
                   updateConfig({ attemptsDatabaseId: mappingProposal.attemptsDatabase.id });
                   // Store fingerprint for change detection
                   const previousFingerprints = JSON.parse(
                     localStorage.getItem('notionSchemaFingerprints') || '{}'
                   );
-                  previousFingerprints[mappingProposal.attemptsDatabase.id] = 
-                    mappingProposal.attemptsDatabase.schemaFingerprint;
+                  discoveryData?.all?.forEach(db => {
+                    previousFingerprints[db.id] = db.schemaFingerprint;
+                  });
                   localStorage.setItem('notionSchemaFingerprints', JSON.stringify(previousFingerprints));
                 }
                 setShowMappingConfirmation(false);
@@ -230,7 +256,7 @@ function InterviewPrepApp() {
                   ))}
                   {discoveryData.attemptsDatabases && (
                     <div className="mt-2 pt-2 border-t border-blue-500/20">
-                      <span className="font-medium">Attempts DB:</span> {discoveryData.attemptsDatabases.title}
+                      <span className="font-medium">Attempts DB:</span> {discoveryData.attemptsDatabases[0]?.title || 'Unknown'}
                     </div>
                   )}
                 </div>
@@ -248,12 +274,6 @@ function InterviewPrepApp() {
               onClick={async () => {
                 await updateConfig(config);
                 setShowSettings(false);
-                // Trigger database discovery
-                if (config.notionKey) {
-                  const { mapping, discovery } = await getDatabaseMapping(config.notionKey);
-                  setDatabaseMapping(mapping);
-                  setDiscoveryData(discovery);
-                }
               }}
               className="flex-1 py-3.5 font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl shadow-xl hover:from-blue-500 hover:to-indigo-500"
             >
@@ -406,4 +426,3 @@ function InterviewPrepApp() {
 }
 
 export default InterviewPrepApp;
-

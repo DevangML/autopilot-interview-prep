@@ -4,11 +4,12 @@
  */
 
 import { ArrowRight, BookmarkCheck, BrainCircuit, CheckCircle, Clock, Link2, Loader2, Network, RotateCcw, Settings, Sparkles, Trophy, X, Zap } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getNextQuestionSuggestion } from './services/gemini.js';
-import { fetchDatabaseItems, applyDataUpdate } from './services/notion.js';
+import { fetchDatabaseItems, applyDataUpdate, prepareDataUpdate } from './services/notion.js';
 import { getConfig, saveConfig } from './services/storage.js';
 import { normalizeTitle, extractSlug, formatDuration } from './utils/index.js';
+import { DataUpdateConfirmation } from './components/DataUpdateConfirmation.jsx';
 
 const formatDurationHelper = formatDuration;
 
@@ -19,6 +20,9 @@ function ExtensionApp() {
   const [error, setError] = useState(null);
   const [activeSession, setActiveSession] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [pendingUpdate, setPendingUpdate] = useState(null);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
+  const pendingUpdateRef = useRef(null);
   const [config, setConfig] = useState({
     notionKey: '',
     databaseId: '',
@@ -83,6 +87,43 @@ function ExtensionApp() {
     setSuggestion(null);
   };
 
+  const requestDataUpdate = async (pageId, proposedChanges) => {
+    const plan = await prepareDataUpdate(config.notionKey, pageId, proposedChanges);
+    if (!plan.hasChanges) return true;
+
+    return new Promise((resolve, reject) => {
+      pendingUpdateRef.current = { resolve, reject, plan, proposedChanges };
+      setPendingUpdate({ plan, proposedChanges });
+    });
+  };
+
+  const confirmPendingUpdate = async () => {
+    if (!pendingUpdateRef.current) return;
+    setIsApplyingUpdate(true);
+    try {
+      await applyDataUpdate(
+        config.notionKey,
+        pendingUpdateRef.current.plan.pageId,
+        pendingUpdateRef.current.proposedChanges
+      );
+      pendingUpdateRef.current.resolve(true);
+    } catch (err) {
+      pendingUpdateRef.current.reject(err);
+    } finally {
+      pendingUpdateRef.current = null;
+      setPendingUpdate(null);
+      setIsApplyingUpdate(false);
+    }
+  };
+
+  const cancelPendingUpdate = () => {
+    if (pendingUpdateRef.current) {
+      pendingUpdateRef.current.resolve(false);
+      pendingUpdateRef.current = null;
+    }
+    setPendingUpdate(null);
+  };
+
   const handleMarkSolved = async () => {
     if (!currentProblem || !config.notionKey || !config.databaseId) {
       setError(!currentProblem ? 'No problem detected' : 'Config missing');
@@ -110,10 +151,14 @@ function ExtensionApp() {
         return false;
       });
       if (match) {
-        await applyDataUpdate(config.notionKey, match.id, {
+        const confirmed = await requestDataUpdate(match.id, {
           'Completed': { checkbox: true },
           'Status': { rich_text: [{ text: { content: 'Solved' } }] }
         });
+        if (!confirmed) {
+          setLoading(false);
+          return;
+        }
       }
       const remaining = pending.filter(p => p.id !== match?.id);
       const next = await getNextQuestionSuggestion(config.geminiKey, currentProblem.title, remaining);
@@ -161,7 +206,11 @@ function ExtensionApp() {
         if (timeSpent > 0) {
           props['Time Spent (mins)'] = { number: timeSpent };
         }
-        await applyDataUpdate(config.notionKey, match.id, props);
+        const confirmed = await requestDataUpdate(match.id, props);
+        if (!confirmed) {
+          setLoading(false);
+          return;
+        }
       }
 
       clearSession();
@@ -206,10 +255,14 @@ function ExtensionApp() {
       });
 
       if (match) {
-        await applyDataUpdate(config.notionKey, match.id, {
+        const confirmed = await requestDataUpdate(match.id, {
           'Completed': { checkbox: true },
           'Status': { rich_text: [{ text: { content: 'Solved' } }] }
         });
+        if (!confirmed) {
+          setLoading(false);
+          return;
+        }
       }
 
       clearSession();
@@ -288,6 +341,17 @@ function ExtensionApp() {
     <div className="w-full h-full bg-[#0B0F19] animated-mesh-bg text-white flex flex-col rounded-2xl relative overflow-hidden">
       <div className="blob bg-indigo-600/20 w-[400px] h-[400px] rounded-full -top-24 -left-24" />
       <div className="blob blob-secondary bg-cyan-600/20 w-[300px] h-[300px] rounded-full -bottom-12 -right-24" />
+
+      {pendingUpdate && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4">
+          <DataUpdateConfirmation
+            plan={pendingUpdate.plan}
+            onConfirm={confirmPendingUpdate}
+            onCancel={cancelPendingUpdate}
+            isApplying={isApplyingUpdate}
+          />
+        </div>
+      )}
 
       <div className="flex relative z-10 flex-col px-5 py-6 h-full">
         {/* Header */}
@@ -486,4 +550,3 @@ function ExtensionApp() {
 }
 
 export default ExtensionApp;
-

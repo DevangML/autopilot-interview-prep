@@ -41,6 +41,14 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
   const sorted = [...items];
   const mode = domainMode || getDefaultDomainMode();
   
+  const getReadinessForItem = (item) => {
+    if (!readiness) return {};
+    if (typeof readiness.successRate === 'number' || typeof readiness.avgConfidence === 'number') {
+      return readiness;
+    }
+    return readiness[item.id] || {};
+  };
+
   // Branch first by domain mode, then by domain type
   if (mode === DOMAIN_MODES.LEARNING) {
     if (domainType === DOMAIN_TYPES.FUNDAMENTALS) {
@@ -59,8 +67,8 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
     if (domainType === DOMAIN_TYPES.CODING) {
       // Readiness-based selection (existing behavior preserved)
       return sorted.sort((a, b) => {
-        const readinessA = calculateReadiness(a, readiness);
-        const readinessB = calculateReadiness(b, readiness);
+        const readinessA = calculateReadiness(a, getReadinessForItem(a));
+        const readinessB = calculateReadiness(b, getReadinessForItem(b));
         const targetDiffA = getTargetDifficultyForReadiness(readinessA);
         const targetDiffB = getTargetDifficultyForReadiness(readinessB);
         
@@ -108,8 +116,8 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
       
       // Secondary sort by domain-specific logic
       if (domainType === DOMAIN_TYPES.CODING) {
-        const readinessA = calculateReadiness(a, readiness);
-        const readinessB = calculateReadiness(b, readiness);
+        const readinessA = calculateReadiness(a, getReadinessForItem(a));
+        const readinessB = calculateReadiness(b, getReadinessForItem(b));
         return readinessA - readinessB; // Lower readiness = higher priority
       }
       
@@ -184,4 +192,3 @@ const getTargetDifficultyForReadiness = (readiness) => {
   if (readiness < 0.7) return DIFFICULTY_LEVELS.MEDIUM;
   return DIFFICULTY_LEVELS.HARD;
 };
-

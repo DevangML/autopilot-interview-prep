@@ -1,0 +1,39 @@
+1) Deterministic orchestration and stable merge order
+- Files: `src/core/sessionOrchestrator.js`, `src/core/difficulty.js`, `tests/orchestrator.test.js`
+- Why: removes hidden nondeterminism, enforces stable ordering, and fixes per-item readiness usage.
+
+2) Session time allocation scaling bug fix
+- Files: `src/core/session.js`
+- Why: prevents total duration overruns and keeps unit counts consistent across durations.
+
+3) Schema fingerprint change tracking and gating
+- Files: `src/services/notionDiscovery.js`, `src/components/DatabaseMappingConfirmation.jsx`, `src/InterviewPrepApp.jsx`, `tests/notionDiscovery.test.js`
+- Why: blocks orchestration on schema drift and surfaces required re-confirmation.
+
+4) Explicit database mapping confirmation (multi-DB selection)
+- Files: `src/components/DatabaseMappingConfirmation.jsx`, `src/InterviewPrepApp.jsx`
+- Why: eliminates implicit auto-picks for ambiguous mappings and supports multi-DB selection.
+
+5) Attempts wiring + schema-aware attempt creation
+- Files: `src/services/notion.js`, `src/hooks/useAttempts.js`, `src/hooks/useConfig.js`, `src/services/storage.js`, `src/InterviewPrepApp.jsx`, `src/App.jsx`
+- Why: connects attempts data to orchestration and records attempts without relying on missing schema fields.
+
+6) Zero-trust data update confirmation flow
+- Files: `src/ExtensionApp.jsx`, `src/components/DataUpdateConfirmation.jsx`, `tests/zeroTrust.test.js`
+- Why: ensures data updates are prepared, reviewed, and explicitly confirmed before mutation.
+
+7) Rescue recap enforcement
+- Files: `src/components/WorkUnit.jsx`
+- Why: enforces the recap requirement for rescue actions before completion.
+
+8) classifyDatabase learning-sheet confidence bug fix
+- Files: `src/services/notionDiscovery.js`
+- Why: prevents use-before-definition that could break confidence floors.
+
+9) Mistake recurrence calculation + cleanup
+- Files: `src/hooks/useAttempts.js`, `src/components/UpgradeFlow.jsx`, `src/App.jsx`
+- Why: removes stale TODOs and unused imports for cleaner integration.
+
+10) Test harness added
+- Files: `package.json`, `tests/orchestrator.test.js`, `tests/notionDiscovery.test.js`, `tests/zeroTrust.test.js`
+- Why: validates deterministic orchestration, schema fingerprint gating, attempts DB guards, and prepare/apply separation.
