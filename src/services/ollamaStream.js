@@ -20,7 +20,54 @@ export const generateContentStream = async (baseUrl, model, prompt, options = {}
 
   const resolvedUrl = baseUrl || 'http://localhost:11434';
   const url = `${resolvedUrl}/api/generate`;
-  const resolvedModel = model || 'llama3';
+  const resolvedModel = model || 'qwen2.5:7b'; // Default to recommended model
+
+  // Ensure Ollama is running before making request
+  try {
+    const statusUrl = `${resolvedUrl}/api/tags`;
+    const statusResponse = await fetch(statusUrl, {
+      method: 'GET',
+      signal: AbortSignal.timeout(2000)
+    });
+    
+    if (!statusResponse.ok) {
+      // Try to wake up Ollama via backend
+      try {
+        const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+        const token = localStorage.getItem('authToken');
+        await fetch(`${backendUrl}/ollama/ensure-running`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ model: resolvedModel })
+        });
+        // Wait a bit for Ollama to start
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      } catch (wakeError) {
+        console.warn('[Ollama] Could not wake up Ollama:', wakeError);
+      }
+    }
+  } catch (checkError) {
+    // Ollama might not be running, try to wake it up
+    try {
+      const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const token = localStorage.getItem('authToken');
+      await fetch(`${backendUrl}/ollama/ensure-running`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ model: resolvedModel })
+      });
+      // Wait a bit for Ollama to start
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    } catch (wakeError) {
+      console.warn('[Ollama] Could not wake up Ollama:', wakeError);
+    }
+  }
 
   const requestBody = {
     model: resolvedModel,

@@ -9,6 +9,7 @@ import { OAuth2Client } from 'google-auth-library';
 import path from 'path';
 import { execFile } from 'child_process';
 import { db, updateTimestamp } from './db.js';
+import { ensureOllamaRunning, stopOllama, getOllamaStatus, isOllamaRunning } from './ollamaManager.js';
 
 const PORT = process.env.API_PORT || 3001;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -647,6 +648,38 @@ app.patch('/items/:id/uncomplete', authMiddleware, requireAllowed, (req, res) =>
   res.json({ success: true, updated: true });
 });
 
+// Ollama management endpoints
+app.post('/ollama/ensure-running', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const { model } = req.body || {};
+    const modelName = model || 'qwen2.5:7b'; // Default to recommended model
+    await ensureOllamaRunning(modelName);
+    res.json({ success: true, message: 'Ollama is running' });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to start Ollama' });
+  }
+});
+
+app.post('/ollama/stop', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const { model } = req.body || {};
+    const modelName = model || 'qwen2.5:7b'; // Default to recommended model
+    await stopOllama(modelName);
+    res.json({ success: true, message: `Ollama stopped (model: ${modelName})` });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to stop Ollama' });
+  }
+});
+
+app.get('/ollama/status', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const status = await getOllamaStatus();
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to get Ollama status' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Local API running at http://localhost:${PORT}`);
   console.log(`[Server] Available routes:`);
@@ -654,4 +687,7 @@ app.listen(PORT, () => {
   console.log(`  GET /items - Get items by source database`);
   console.log(`  POST /items/reset-domain - Reset domain progress`);
   console.log(`  PATCH /items/:id/uncomplete - Uncomplete an item`);
+  console.log(`  POST /ollama/ensure-running - Start Ollama if not running`);
+  console.log(`  POST /ollama/stop - Stop Ollama service`);
+  console.log(`  GET /ollama/status - Get Ollama status`);
 });
