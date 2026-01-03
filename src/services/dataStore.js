@@ -202,3 +202,14 @@ export const createItem = async (itemData) => {
     throw error;
   }
 };
+
+export const checkItemExists = async (url) => {
+  try {
+    // Check if item with this URL exists
+    const items = await apiFetch(`/items?url=${encodeURIComponent(url)}`);
+    return items && items.length > 0 ? items[0] : null;
+  } catch (error) {
+    console.error('[dataStore] checkItemExists error:', error);
+    return null;
+  }
+};

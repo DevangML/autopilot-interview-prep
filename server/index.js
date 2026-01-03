@@ -252,6 +252,35 @@ app.get('/source-databases', authMiddleware, requireAllowed, (req, res) => {
   res.json(rows);
 });
 
+app.post('/source-databases', authMiddleware, requireAllowed, (req, res) => {
+  const { title, domain, filename } = req.body || {};
+  
+  if (!title || !domain) {
+    res.status(400).json({ error: 'Missing required fields: title, domain.' });
+    return;
+  }
+  
+  const id = crypto.randomUUID();
+  const finalFilename = filename || `web-import-${domain.toLowerCase()}-${Date.now()}.csv`;
+  const schemaHash = crypto.createHash('sha256').update('web-import').digest('hex');
+  
+  db.prepare(`
+    insert into source_databases (
+      id, user_id, title, filename, domain, confidence, schema_hash, item_count
+    )
+    values (?, ?, ?, ?, ?, 1.0, ?, 0)
+  `).run(id, req.user.id, title, finalFilename, domain, schemaHash);
+  
+  const created = db.prepare(`
+    select id, title, domain, confidence, item_count, filename,
+      schema_hash, schema_snapshot, confirmed_schema_hash, confirmed_schema_snapshot
+    from source_databases
+    where id = ?
+  `).get(id);
+  
+  res.status(201).json(created);
+});
+
 app.patch('/source-databases/:id', authMiddleware, requireAllowed, (req, res) => {
   const { domain } = req.body || {};
   if (!domain) {
@@ -315,8 +344,25 @@ app.post('/imports/csvs', authMiddleware, requireAllowed, async (req, res) => {
 
 app.get('/items', authMiddleware, requireAllowed, (req, res) => {
   const sourceDatabaseId = req.query.sourceDatabaseId;
+  const url = req.query.url;
+  
+  // URL-based lookup (for question detection)
+  if (url) {
+    const rows = db.prepare(`
+      select li.id, li.name, sd.domain as domain, li.difficulty, li.pattern, li.completed, li.source_database_id, li.raw
+      from learning_items li
+      join source_databases sd on sd.id = li.source_database_id
+      where li.user_id = ? and li.raw like ?
+      order by li.created_at desc
+      limit 1
+    `).all(req.user.id, `%"url":"${url}"%`);
+    res.json(rows);
+    return;
+  }
+  
+  // Source database lookup
   if (!sourceDatabaseId) {
-    res.status(400).json({ error: 'Missing sourceDatabaseId.' });
+    res.status(400).json({ error: 'Missing sourceDatabaseId or url.' });
     return;
   }
   const rows = db.prepare(`

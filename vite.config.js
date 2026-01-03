@@ -15,12 +15,18 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         'interview-prep': resolve(__dirname, 'interview-prep.html'),
+        'content/contentScript': resolve(__dirname, 'src/content/contentScript.js'),
+        'background/background': resolve(__dirname, 'src/background/background.js'),
       },
       output: {
         entryFileNames: (chunkInfo) => {
-          return chunkInfo.name === 'main' || chunkInfo.name === 'interview-prep' 
-            ? 'assets/[name]-[hash].js' 
-            : '[name].js';
+          if (chunkInfo.name === 'main' || chunkInfo.name === 'interview-prep') {
+            return 'assets/[name]-[hash].js';
+          }
+          if (chunkInfo.name.includes('content') || chunkInfo.name.includes('background')) {
+            return '[name].js';
+          }
+          return 'assets/[name]-[hash].js';
         },
       },
     },

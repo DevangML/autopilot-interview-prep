@@ -15,6 +15,7 @@ import { WorkUnit } from './components/WorkUnit.jsx';
 import { ProgressView } from './components/ProgressView.jsx';
 import { DetailsView } from './components/DetailsView.jsx';
 import { DeepImproveChat } from './components/DeepImproveChat.jsx';
+import { QuestionDetector } from './components/QuestionDetector.jsx';
 import { orchestrateSession, orchestrateMoodSession } from './core/sessionOrchestrator.js';
 import { composeMoodSession, FOCUS_MODES } from './core/session.js';
 import { createAIService, AI_PROVIDERS } from './services/aiService.js';
@@ -1014,6 +1015,11 @@ function InterviewPrepApp() {
             <div className="p-3 rounded-lg border bg-red-500/10 border-red-500/20">
               <p className="text-sm text-red-400">{error}</p>
             </div>
+          )}
+
+          {/* Question Detector - Shows when extension opened on any site */}
+          {!isActive && user && profile && (
+            <QuestionDetector />
           )}
 
           {!hasData && (
