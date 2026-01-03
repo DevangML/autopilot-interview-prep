@@ -40,6 +40,7 @@ const calculateEffectiveDifficulty = (baseDifficulty, failureStreak = 0) => {
 export const prioritizeByDifficulty = (items, domainType, readiness = {}, domainMode = null, attemptsData = {}) => {
   const sorted = [...items];
   const mode = domainMode || getDefaultDomainMode();
+  const tieBreak = (a, b) => (a.id || a.name || '').localeCompare(b.id || b.name || '');
   
   const getReadinessForItem = (item) => {
     if (!readiness) return {};
@@ -61,7 +62,12 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
           ...item,
           effectiveDifficulty: calculateEffectiveDifficulty(baseDiff, failureStreak)
         };
-      }).sort((a, b) => b.effectiveDifficulty - a.effectiveDifficulty);
+      }).sort((a, b) => {
+        if (b.effectiveDifficulty !== a.effectiveDifficulty) {
+          return b.effectiveDifficulty - a.effectiveDifficulty;
+        }
+        return tieBreak(a, b);
+      });
     }
     
     if (domainType === DOMAIN_TYPES.CODING) {
@@ -74,7 +80,8 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
         
         const matchA = Math.abs((a.difficulty || 3) - targetDiffA);
         const matchB = Math.abs((b.difficulty || 3) - targetDiffB);
-        return matchA - matchB;
+        if (matchA !== matchB) return matchA - matchB;
+        return tieBreak(a, b);
       });
     }
     
@@ -91,7 +98,8 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
         
         const diffA = (a.difficulty || 3) * 0.1;
         const diffB = (b.difficulty || 3) * 0.1;
-        return diffB - diffA;
+        if (diffB !== diffA) return diffB - diffA;
+        return tieBreak(a, b);
       });
     }
     
@@ -99,7 +107,8 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
     return sorted.sort((a, b) => {
       const diffA = a.difficulty || DIFFICULTY_LEVELS.MEDIUM;
       const diffB = b.difficulty || DIFFICULTY_LEVELS.MEDIUM;
-      return diffB - diffA;
+      if (diffB !== diffA) return diffB - diffA;
+      return tieBreak(a, b);
     });
   }
   
@@ -118,12 +127,14 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
       if (domainType === DOMAIN_TYPES.CODING) {
         const readinessA = calculateReadiness(a, getReadinessForItem(a));
         const readinessB = calculateReadiness(b, getReadinessForItem(b));
-        return readinessA - readinessB; // Lower readiness = higher priority
+        if (readinessA !== readinessB) return readinessA - readinessB;
+        return tieBreak(a, b);
       }
       
       const diffA = a.difficulty || DIFFICULTY_LEVELS.MEDIUM;
       const diffB = b.difficulty || DIFFICULTY_LEVELS.MEDIUM;
-      return diffB - diffA;
+      if (diffB !== diffA) return diffB - diffA;
+      return tieBreak(a, b);
     });
   }
   
@@ -137,7 +148,11 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
       const confidenceA = attemptsData[a.id]?.avgConfidence || 0.5;
       const confidenceB = attemptsData[b.id]?.avgConfidence || 0.5;
       // Lower confidence = higher priority for polish
-      return confidenceA - confidenceB;
+      if (confidenceA !== confidenceB) return confidenceA - confidenceB;
+      const diffA = a.difficulty || DIFFICULTY_LEVELS.MEDIUM;
+      const diffB = b.difficulty || DIFFICULTY_LEVELS.MEDIUM;
+      if (diffA !== diffB) return diffA - diffB;
+      return tieBreak(a, b);
     });
   }
   
@@ -154,7 +169,8 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
       
       const diffA = (a.difficulty || 3) * 0.1;
       const diffB = (b.difficulty || 3) * 0.1;
-      return diffB - diffA;
+      if (diffB !== diffA) return diffB - diffA;
+      return tieBreak(a, b);
     });
   }
   
@@ -162,7 +178,8 @@ export const prioritizeByDifficulty = (items, domainType, readiness = {}, domain
   return sorted.sort((a, b) => {
     const diffA = a.difficulty || DIFFICULTY_LEVELS.MEDIUM;
     const diffB = b.difficulty || DIFFICULTY_LEVELS.MEDIUM;
-    return diffB - diffA;
+    if (diffB !== diffA) return diffB - diffA;
+    return tieBreak(a, b);
   });
 };
 

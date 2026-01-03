@@ -1,0 +1,10 @@
+- Fixed client/server API mismatches (extra userId args) that broke item/attempt loading and domain updates, restoring correct data flow.
+- Removed time-based review windows and added deterministic tie-breakers in prioritization to guarantee same inputs yield the same session.
+- Added attempt-derived signals (recentlyFailed, isOverdue, needsRefinement, confidence) and used them in revision/polish logic so mode behavior is actually enforced.
+- Computed minutesDoneLast7d deterministically from attempt data to drive coverage debt as specified.
+- Introduced schema fingerprinting with snapshots + confirmation gating, and blocked session start until schema changes are explicitly confirmed.
+- Converted unknown-domain mapping to a confirmable, low-cognitive flow with max-3 suggestions instead of long lists.
+- Simplified the entry screen to “Start Today’s Session” with only duration, focus, and start (no dashboard/preview).
+- Marked rescue completions as Partial (not Solved) to respect failure-backoff semantics.
+- Added required SQLite tables (learning_items, sessions, metadata) and migrated existing items to learning_items.
+- Removed Notion extension residue (background proxy + manifest permissions/description) to align with no-Notion policy.

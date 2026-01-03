@@ -16,6 +16,7 @@ import { generateContent } from './services/gemini.js';
 import {
   fetchItemsBySourceDatabase,
   fetchSourceDatabases,
+  confirmSourceDatabaseSchema,
   importCsvs,
   updateSourceDatabaseDomain
 } from './services/dataStore.js';
@@ -61,6 +62,9 @@ function InterviewPrepApp() {
   const [geminiDraft, setGeminiDraft] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importMessage, setImportMessage] = useState(null);
+  const [unknownIndex, setUnknownIndex] = useState(0);
+  const [pendingSchemaIndex, setPendingSchemaIndex] = useState(0);
+  const [domainDraft, setDomainDraft] = useState('');
 
   const isAllowed = Boolean(profile?.is_allowed);
   const envGeminiKey = import.meta.env.VITE_GEMINI_KEY || '';
@@ -68,6 +72,11 @@ function InterviewPrepApp() {
   const isConfigured = Boolean(effectiveGeminiKey);
   const hasData = Object.keys(databaseMapping).length > 0;
   const unknownDatabases = databases.filter(db => db.domain === 'Unknown');
+  const pendingSchemas = useMemo(
+    () => databases.filter(db => db.schema_hash && db.confirmed_schema_hash !== db.schema_hash),
+    [databases]
+  );
+  const hasPendingSchemas = pendingSchemas.length > 0;
 
   useEffect(() => {
     if (profile?.gemini_key !== undefined) {
@@ -75,12 +84,52 @@ function InterviewPrepApp() {
     }
   }, [profile?.gemini_key]);
 
+  useEffect(() => {
+    if (unknownIndex >= unknownDatabases.length) {
+      setUnknownIndex(0);
+    }
+  }, [unknownDatabases.length, unknownIndex]);
+
+  useEffect(() => {
+    if (unknownDatabases.length === 0) {
+      setDomainDraft('');
+      return;
+    }
+    const current = unknownDatabases[unknownIndex];
+    setDomainDraft(current?.domain === 'Unknown' ? '' : current?.domain || '');
+  }, [unknownDatabases, unknownIndex]);
+
+  useEffect(() => {
+    if (pendingSchemaIndex >= pendingSchemas.length) {
+      setPendingSchemaIndex(0);
+    }
+  }, [pendingSchemas.length, pendingSchemaIndex]);
+
+  const getSchemaDiff = (db) => {
+    const parseSnapshot = (snapshot) => {
+      if (!snapshot) return [];
+      try {
+        const parsed = JSON.parse(snapshot);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+    const currentList = parseSnapshot(db.schema_snapshot);
+    const confirmedList = parseSnapshot(db.confirmed_schema_snapshot);
+    const current = new Set(currentList);
+    const confirmed = new Set(confirmedList);
+    const added = [...current].filter(col => !confirmed.has(col));
+    const removed = [...confirmed].filter(col => !current.has(col));
+    return { added, removed, hasSnapshot: currentList.length > 0 || confirmedList.length > 0 };
+  };
+
   const refreshDatabases = async () => {
     if (!user?.id) return;
     setIsLoadingData(true);
     setError(null);
     try {
-      const dbs = await fetchSourceDatabases(user.id);
+      const dbs = await fetchSourceDatabases();
       setDatabases(dbs);
       setDatabaseMapping(buildMapping(dbs));
     } catch (err) {
@@ -126,13 +175,41 @@ function InterviewPrepApp() {
   }, [user, endSession]);
 
   const handleStartSession = async ({ totalMinutes, focusMode }) => {
+    console.log('[InterviewPrepApp] handleStartSession called', { 
+      totalMinutes, 
+      focusMode, 
+      hasData, 
+      unknownDatabases: unknownDatabases.length,
+      hasPendingSchemas,
+      isConfigured,
+      databaseMapping: Object.keys(databaseMapping).length
+    });
+
     if (!hasData) {
-      setError('No imported databases found. Import CSVs into the local DB first.');
+      const errorMsg = 'No imported databases found. Import CSVs into the local DB first.';
+      console.error('[InterviewPrepApp]', errorMsg);
+      setError(errorMsg);
+      return;
+    }
+
+    if (unknownDatabases.length > 0) {
+      const errorMsg = `Assign domains to all imported databases before starting a session. ${unknownDatabases.length} database(s) need domains.`;
+      console.error('[InterviewPrepApp]', errorMsg);
+      setError(errorMsg);
+      return;
+    }
+
+    if (hasPendingSchemas) {
+      const errorMsg = 'Schema changes need confirmation before starting a session.';
+      console.error('[InterviewPrepApp]', errorMsg);
+      setError(errorMsg);
       return;
     }
 
     if (!isConfigured) {
-      setError('Add your Gemini API key in Settings to start a session.');
+      const errorMsg = 'Add your Gemini API key in Settings to start a session.';
+      console.error('[InterviewPrepApp]', errorMsg);
+      setError(errorMsg);
       return;
     }
 
@@ -140,15 +217,16 @@ function InterviewPrepApp() {
     setError(null);
 
     try {
+      console.log('[InterviewPrepApp] Starting orchestration...');
       const units = await orchestrateSession({
         databases: databaseMapping,
         totalMinutes,
         focusMode,
         getAttemptsData,
-        fetchItems: (dbId) => fetchItemsBySourceDatabase(user.id, dbId),
-        now: Date.now()
+        fetchItems: (dbId) => fetchItemsBySourceDatabase(dbId)
       });
 
+      console.log('[InterviewPrepApp] Orchestration complete', { units });
       startSession({
         totalMinutes,
         focusMode,
@@ -159,7 +237,8 @@ function InterviewPrepApp() {
         }
       });
     } catch (err) {
-      setError(err.message);
+      console.error('[InterviewPrepApp] Orchestration error:', err);
+      setError(err.message || 'Failed to start session');
     } finally {
       setIsOrchestrating(false);
     }
@@ -177,7 +256,7 @@ function InterviewPrepApp() {
         await recordAttempt({
           itemId: currentUnit.item.id,
           sheet: currentUnit.item.domain || 'Unknown',
-          result: 'Solved',
+          result: normalized.usedRescue ? 'Partial' : 'Solved',
           timeSpent: currentUnit.timeMinutes || 0,
           hintUsed: Boolean(normalized.usedRescue)
         });
@@ -320,31 +399,155 @@ function InterviewPrepApp() {
                   {isLoadingData ? 'Refreshing...' : 'Refresh'}
                 </button>
               </div>
+              {hasPendingSchemas && (
+                <div className="mt-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
+                  <div className="text-xs text-amber-300 font-semibold uppercase mb-1">Schema confirmation</div>
+                  <div className="text-sm text-amber-100">
+                    {pendingSchemas.length} database{pendingSchemas.length !== 1 ? 's' : ''} need confirmation.
+                  </div>
+                  {pendingSchemas.length > 0 && (
+                    <div className="mt-3 text-xs text-amber-100">
+                      <div className="font-semibold text-amber-200 mb-1">
+                        {pendingSchemas[pendingSchemaIndex]?.title}
+                      </div>
+                      {(() => {
+                        const diff = getSchemaDiff(pendingSchemas[pendingSchemaIndex]);
+                        const added = diff.added.slice(0, 3);
+                        const removed = diff.removed.slice(0, 3);
+                        return (
+                          <div className="space-y-1">
+                            {!diff.hasSnapshot ? (
+                              <div className="text-amber-200">
+                                No schema snapshot yet. Re-import to generate details.
+                              </div>
+                            ) : (
+                              <>
+                                <div>
+                                  Added: {added.length > 0 ? added.join(', ') : '—'}
+                                  {diff.added.length > 3 ? ` +${diff.added.length - 3} more` : ''}
+                                </div>
+                                <div>
+                                  Removed: {removed.length > 0 ? removed.join(', ') : '—'}
+                                  {diff.removed.length > 3 ? ` +${diff.removed.length - 3} more` : ''}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
+                      <div className="mt-3 flex gap-2">
+                        {pendingSchemas.length > 1 && (
+                          <button
+                            onClick={() => setPendingSchemaIndex((prev) => Math.max(0, prev - 1))}
+                            className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-amber-100"
+                          >
+                            Previous
+                          </button>
+                        )}
+                        {pendingSchemas.length > 1 && (
+                          <button
+                            onClick={() => setPendingSchemaIndex((prev) => Math.min(pendingSchemas.length - 1, prev + 1))}
+                            className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-amber-100"
+                          >
+                            Next
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const target = pendingSchemas[pendingSchemaIndex];
+                          if (!target) return;
+                          if (!window.confirm(`Confirm schema changes for ${target.title}?`)) return;
+                          try {
+                            await confirmSourceDatabaseSchema(target.id);
+                            await refreshDatabases();
+                          } catch (err) {
+                            setError(err.message);
+                          }
+                        }}
+                        className="mt-3 w-full py-2 rounded-lg bg-amber-500/30 border border-amber-500/40 text-xs font-semibold text-amber-50"
+                      >
+                        Confirm schema for this database
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               {unknownDatabases.length > 0 && (
                 <div className="mt-3 space-y-2">
                   <div className="text-xs text-amber-400">
                     {unknownDatabases.length} databases need a domain selection.
                   </div>
-                  {unknownDatabases.map(db => (
-                    <div key={db.id} className="flex items-center gap-2">
-                      <div className="flex-1 text-xs text-gray-300">{db.title}</div>
-                      <select
-                        value={db.domain}
-                        onChange={(event) => {
-                          const nextDomain = event.target.value;
-                          updateSourceDatabaseDomain(user.id, db.id, nextDomain)
-                            .then(() => refreshDatabases())
-                            .catch(err => setError(err.message));
-                        }}
-                        className="bg-white/10 border border-white/10 text-xs text-gray-200 rounded-lg px-2 py-1"
-                      >
-                        <option value="Unknown">Unknown</option>
-                        {DOMAIN_OPTIONS.map(domain => (
-                          <option key={domain} value={domain}>{domain}</option>
-                        ))}
-                      </select>
+                  {unknownDatabases.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 text-xs text-gray-300">
+                        {unknownDatabases[unknownIndex]?.title}
+                      </div>
+                      <input
+                        value={domainDraft}
+                        onChange={(event) => setDomainDraft(event.target.value)}
+                        placeholder="Type a domain..."
+                        className="bg-white/10 border border-white/10 text-xs text-gray-200 rounded-lg px-2 py-1 w-40"
+                      />
                     </div>
-                  ))}
+                  )}
+                  {unknownDatabases.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {DOMAIN_OPTIONS
+                        .filter(domain => domain.toLowerCase().includes(domainDraft.toLowerCase()))
+                        .slice(0, 3)
+                        .map(domain => (
+                          <button
+                            key={domain}
+                            onClick={() => setDomainDraft(domain)}
+                            className="px-2 py-1 rounded-lg bg-white/10 text-xs text-gray-200"
+                          >
+                            {domain}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                  {unknownDatabases.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const target = unknownDatabases[unknownIndex];
+                        if (!target) return;
+                        const normalized = DOMAIN_OPTIONS.find(domain =>
+                          domain.toLowerCase() === domainDraft.trim().toLowerCase()
+                        );
+                        if (!normalized) {
+                          setError('Enter a valid domain name.');
+                          return;
+                        }
+                        if (!window.confirm(`Set domain for ${target.title} to ${normalized}?`)) {
+                          return;
+                        }
+                        updateSourceDatabaseDomain(target.id, normalized)
+                          .then(() => refreshDatabases())
+                          .catch(err => setError(err.message));
+                      }}
+                      disabled={!domainDraft.trim()}
+                      className="w-full py-2 rounded-lg bg-white/10 text-xs text-gray-200 disabled:opacity-50"
+                    >
+                      Apply domain
+                    </button>
+                  )}
+                  {unknownDatabases.length > 1 && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setUnknownIndex((prev) => Math.max(0, prev - 1))}
+                        className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-gray-300"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => setUnknownIndex((prev) => Math.min(unknownDatabases.length - 1, prev + 1))}
+                        className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-gray-300"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -426,7 +629,7 @@ function InterviewPrepApp() {
           {!hasData && (
             <div className="p-4 rounded-lg border bg-yellow-500/10 border-yellow-500/20">
               <p className="text-sm text-yellow-400">
-                No imported databases found. Add CSV exports to <code>data/</code> and run the import script.
+                No imported databases found. Open Settings and import CSVs from <code>data/</code>.
               </p>
             </div>
           )}

@@ -6,6 +6,10 @@
 import { useCallback, useState } from 'react';
 import { createAttempt, fetchAttempts } from '../services/dataStore.js';
 
+const REVIEW_ATTEMPT_WINDOW = 10;
+const OVERDUE_ATTEMPT_GAP = 15;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
 /**
  * Hook for managing attempts
  * @param {string} userId - Authenticated user ID
@@ -20,8 +24,8 @@ export const useAttempts = (userId) => {
     
     setIsLoading(true);
     try {
-      const items = await fetchAttempts(userId, itemId);
-      setAttempts(items);
+      const fetched = await fetchAttempts(itemId);
+      setAttempts(fetched);
     } catch (error) {
       console.error('Failed to load attempts:', error);
     } finally {
@@ -34,7 +38,7 @@ export const useAttempts = (userId) => {
     if (!userId) return;
     
     try {
-      const created = await createAttempt(userId, attemptData);
+      const created = await createAttempt(attemptData);
       setAttempts(prev => [created, ...prev]);
       return created;
     } catch (error) {
@@ -45,7 +49,9 @@ export const useAttempts = (userId) => {
 
   // Calculate readiness metrics for an item
   const getReadiness = (itemId) => {
-    const itemAttempts = attempts.filter(a => a.item_id === itemId);
+    const itemAttempts = attempts
+      .filter(a => a.item_id === itemId)
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
     
     if (itemAttempts.length === 0) {
       return {
@@ -154,15 +160,46 @@ export const useAttempts = (userId) => {
   const getAttemptsData = (allItems = []) => {
     const data = {};
     const itemReadinessMap = {};
-    
+    const itemMap = new Map(allItems.map(item => [item.id, item]));
+
     // Build readiness map for all items
     allItems.forEach(item => {
       itemReadinessMap[item.id] = getReadiness(item.id);
     });
 
+    const orderedAttempts = [...attempts].sort((a, b) => {
+      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return bTime - aTime;
+    });
+
+    const maxAttemptTime = orderedAttempts[0]?.created_at
+      ? new Date(orderedAttempts[0].created_at).getTime()
+      : 0;
+    const recentCutoff = maxAttemptTime ? maxAttemptTime - SEVEN_DAYS_MS : 0;
+
+    const attemptIndexByItem = new Map();
+    orderedAttempts.forEach((attempt, index) => {
+      if (!attemptIndexByItem.has(attempt.item_id)) {
+        attemptIndexByItem.set(attempt.item_id, index);
+      }
+    });
+
     const solvedItemIds = new Set(
-      attempts.filter(attempt => attempt.result === 'Solved').map(attempt => attempt.item_id)
+      attempts
+        .filter(attempt => attempt.result === 'Solved' || attempt.result === 'Partial')
+        .map(attempt => attempt.item_id)
     );
+
+    const domainMinutesLast7d = {};
+    orderedAttempts.forEach(attempt => {
+      const attemptTime = attempt.created_at ? new Date(attempt.created_at).getTime() : 0;
+      if (!attemptTime || !maxAttemptTime || attemptTime < recentCutoff) return;
+      const item = itemMap.get(attempt.item_id);
+      if (!item?.domain) return;
+      const minutes = typeof attempt.time_spent_min === 'number' ? attempt.time_spent_min : 0;
+      domainMinutesLast7d[item.domain] = (domainMinutesLast7d[item.domain] || 0) + minutes;
+    });
 
     allItems.forEach(item => {
       const itemId = item.id;
@@ -174,12 +211,24 @@ export const useAttempts = (userId) => {
       
       const lastAttempt = recentAttempts[0];
       const lastResult = lastAttempt?.result;
+      const lastAttemptIndex = attemptIndexByItem.has(itemId)
+        ? attemptIndexByItem.get(itemId)
+        : null;
+      const hasAttempts = itemAttempts.length > 0;
+      const avgConfidence = itemReadinessMap[itemId]?.avgConfidence || 0.5;
       
       data[itemId] = {
         failureStreak: getFailureStreak(itemId),
         recentlyFailed: lastResult === 'Stuck' || lastResult === 'Skipped',
         lastAttempt: lastAttempt?.created_at ? new Date(lastAttempt.created_at).getTime() : null,
-        avgConfidence: itemReadinessMap[itemId]?.avgConfidence || 0.5
+        lastAttemptIndex,
+        lastResult: lastResult || null,
+        hasAttempts,
+        avgConfidence,
+        isOverdue: hasAttempts
+          ? lastAttemptIndex !== null && lastAttemptIndex >= OVERDUE_ATTEMPT_GAP
+          : false,
+        needsRefinement: (lastResult === 'Stuck' || lastResult === 'Skipped') || avgConfidence < 0.5
       };
     });
 
@@ -187,6 +236,12 @@ export const useAttempts = (userId) => {
       itemData: data,
       itemReadinessMap,
       completedItemIds: Array.from(solvedItemIds),
+      domainData: Object.entries(domainMinutesLast7d).reduce((acc, [domain, minutes]) => {
+        acc[domain] = { minutesLast7d: minutes };
+        return acc;
+      }, {}),
+      maxAttemptTime,
+      reviewWindow: REVIEW_ATTEMPT_WINDOW,
       getPatternReadiness: (pattern) => getPatternReadiness(pattern, allItems, itemReadinessMap)
     };
   };

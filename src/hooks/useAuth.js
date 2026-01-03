@@ -36,7 +36,9 @@ export const useAuth = () => {
 
   const signInWithGoogleCredential = useCallback(async (idToken) => {
     setError(null);
+    console.log('[useAuth] Signing in with credential', { hasToken: !!idToken, isDevToken: idToken?.startsWith('dev_token_') });
     const result = await exchangeGoogleToken(idToken);
+    console.log('[useAuth] Sign-in result', { hasToken: !!result.token, user: result.user?.email });
     setAuthToken(result.token);
     setUser(result.user);
     return result.user;

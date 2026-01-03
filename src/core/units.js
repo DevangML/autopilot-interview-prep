@@ -18,7 +18,7 @@ export const UNIT_TYPES = {
 export const UNIT_CONFIG = {
   [UNIT_TYPES.SOLVE_PROBLEM]: {
     name: 'Solve Problem',
-    domains: ['DSA', 'OA'],
+    domains: ['DSA', 'OA', 'Aptitude', 'Puzzles'],
     requiresOutput: true,
     outputType: 'solution'
   },
@@ -70,4 +70,3 @@ export const isValidUnitTypeForDomain = (unitType, domainName) => {
   const config = UNIT_CONFIG[unitType];
   return config?.domains.includes(domainName) || false;
 };
-

@@ -98,8 +98,47 @@ const requireAllowed = (req, res, next) => {
   next();
 };
 
+// Dev mode: Bypass OAuth for testing
+app.post('/auth/dev', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    res.status(403).json({ error: 'Dev mode not available in production.' });
+    return;
+  }
+  const { email } = req.body || {};
+  if (!email) {
+    res.status(400).json({ error: 'Missing email.' });
+    return;
+  }
+  
+  // Find user by email
+  const user = db.prepare('select id, email, full_name, gemini_key, is_allowed from users where lower(email) = lower(?)').get(email);
+  if (!user) {
+    res.status(404).json({ error: 'User not found. Sign in with Google first to create account.' });
+    return;
+  }
+  
+  const token = signToken(user);
+  res.json({ token, user });
+});
+
 app.post('/auth/google', async (req, res) => {
   const { idToken } = req.body || {};
+  
+  // Handle dev mode token
+  if (idToken?.startsWith('dev_token_')) {
+    const actualToken = idToken.replace('dev_token_', '');
+    try {
+      const payload = jwt.verify(actualToken, JWT_SECRET);
+      const user = getUserById(payload.sub);
+      if (user) {
+        res.json({ token: actualToken, user });
+        return;
+      }
+    } catch (err) {
+      // Fall through to normal OAuth flow
+    }
+  }
+  
   if (!idToken) {
     res.status(400).json({ error: 'Missing idToken.' });
     return;
@@ -151,7 +190,8 @@ app.patch('/me', authMiddleware, (req, res) => {
 
 app.get('/source-databases', authMiddleware, requireAllowed, (req, res) => {
   const rows = db.prepare(`
-    select id, title, domain, confidence, item_count, filename
+    select id, title, domain, confidence, item_count, filename,
+      schema_hash, schema_snapshot, confirmed_schema_hash, confirmed_schema_snapshot
     from source_databases
     where user_id = ?
     order by title asc
@@ -175,7 +215,31 @@ app.patch('/source-databases/:id', authMiddleware, requireAllowed, (req, res) =>
   }
   updateTimestamp('source_databases', req.params.id);
   const updated = db.prepare(`
-    select id, title, domain, confidence, item_count, filename
+    select id, title, domain, confidence, item_count, filename,
+      schema_hash, schema_snapshot, confirmed_schema_hash, confirmed_schema_snapshot
+    from source_databases
+    where id = ?
+  `).get(req.params.id);
+  res.json(updated);
+});
+
+app.post('/source-databases/:id/confirm-schema', authMiddleware, requireAllowed, (req, res) => {
+  const info = db.prepare(`
+    update source_databases
+    set confirmed_schema_hash = schema_hash,
+        confirmed_schema_snapshot = schema_snapshot,
+        updated_at = datetime('now')
+    where id = ? and user_id = ?
+  `).run(req.params.id, req.user.id);
+
+  if (info.changes === 0) {
+    res.status(404).json({ error: 'Database not found.' });
+    return;
+  }
+
+  const updated = db.prepare(`
+    select id, title, domain, confidence, item_count, filename,
+      schema_hash, schema_snapshot, confirmed_schema_hash, confirmed_schema_snapshot
     from source_databases
     where id = ?
   `).get(req.params.id);
@@ -199,7 +263,7 @@ app.get('/items', authMiddleware, requireAllowed, (req, res) => {
   }
   const rows = db.prepare(`
     select id, name, domain, difficulty, pattern, completed, source_database_id
-    from items
+    from learning_items
     where user_id = ? and source_database_id = ?
     order by name asc
   `).all(req.user.id, sourceDatabaseId);

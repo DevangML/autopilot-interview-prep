@@ -313,19 +313,30 @@ const run = async () => {
   }
 
   const upsertSourceDatabase = db.prepare(`
-    insert into source_databases (id, user_id, title, filename, domain, confidence, schema_hash, item_count)
-    values (@id, @user_id, @title, @filename, @domain, @confidence, @schema_hash, @item_count)
+    insert into source_databases (
+      id, user_id, title, filename, domain, confidence, schema_hash, schema_snapshot, item_count
+    )
+    values (@id, @user_id, @title, @filename, @domain, @confidence, @schema_hash, @schema_snapshot, @item_count)
     on conflict (user_id, filename) do update set
       title = excluded.title,
       domain = excluded.domain,
       confidence = excluded.confidence,
       schema_hash = excluded.schema_hash,
+      schema_snapshot = excluded.schema_snapshot,
       item_count = excluded.item_count,
+      confirmed_schema_hash = case
+        when source_databases.schema_hash = excluded.schema_hash then source_databases.confirmed_schema_hash
+        else null
+      end,
+      confirmed_schema_snapshot = case
+        when source_databases.schema_hash = excluded.schema_hash then source_databases.confirmed_schema_snapshot
+        else null
+      end,
       updated_at = datetime('now')
   `);
 
   const upsertItem = db.prepare(`
-    insert into items (id, user_id, source_database_id, name, domain, difficulty, pattern, completed, raw, row_hash)
+    insert into learning_items (id, user_id, source_database_id, name, domain, difficulty, pattern, completed, raw, row_hash)
     values (@id, @user_id, @source_database_id, @name, @domain, @difficulty, @pattern, @completed, @raw, @row_hash)
     on conflict (user_id, source_database_id, row_hash) do update set
       name = excluded.name,
@@ -348,7 +359,8 @@ const run = async () => {
     const headers = records.length > 0 ? Object.keys(records[0]) : [];
     const headerMap = buildNormalizedHeaderMap(headers);
     const title = path.parse(file).name;
-    const schemaHash = hashString(headers.map(h => normalizeLabel(h)).sort().join('|'));
+    const schemaHash = hashString(headers.map(h => `${normalizeLabel(h)}:text`).sort().join('|'));
+    const schemaSnapshot = JSON.stringify(headers);
     const classification = classifyDatabase(title, headers);
     const sourceDatabaseId = crypto.randomUUID();
     const csvTableName = makeTables ? buildCsvTableName(title) : null;
@@ -362,6 +374,7 @@ const run = async () => {
       domain: classification.domain,
       confidence: classification.confidence,
       schema_hash: schemaHash,
+      schema_snapshot: schemaSnapshot,
       item_count: records.length
     });
 

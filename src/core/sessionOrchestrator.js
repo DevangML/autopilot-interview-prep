@@ -3,7 +3,7 @@
  * Composes daily sessions by selecting appropriate units
  */
 
-import { classifyDomain, getDomainsByType, DOMAIN_TYPES } from './domains.js';
+import { classifyDomain, DOMAIN_TYPES } from './domains.js';
 import { calculateCoverageDebt, getDefaultWeeklyFloor } from './coverage.js';
 import { prioritizeByDifficulty } from './difficulty.js';
 import { getUnitTypesForDomain, UNIT_TYPES } from './units.js';
@@ -25,8 +25,7 @@ export const orchestrateSession = async ({
   focusMode,
   attemptsData = {},
   getAttemptsData,
-  fetchItems,
-  now = Date.now()
+  fetchItems
 }) => {
   // Fetch items from all databases
   // Support multiple databases per domain (arrays) with deterministic merge order
@@ -76,6 +75,9 @@ export const orchestrateSession = async ({
     : attemptsData;
   const itemAttempts = attemptsContext?.itemData || attemptsContext || {};
   const completedItemIds = new Set(attemptsContext?.completedItemIds || []);
+  const reviewWindow = attemptsContext?.reviewWindow || 10;
+
+  const tieBreak = (a, b) => (a.id || a.name || '').localeCompare(b.id || b.name || '');
 
   // Calculate coverage debt for each domain
   const domainDebts = {};
@@ -92,26 +94,42 @@ export const orchestrateSession = async ({
     });
   });
 
-  // Select Review Unit (highest coverage debt, overdue items)
+  // Select Review Unit (recently completed items, attempt-order based)
   const reviewCandidates = allItems
     .filter(item => {
-      // Filter for review-worthy items (recently completed, needs review)
-      const lastAttempt = itemAttempts[item.id]?.lastAttempt;
-      if (!lastAttempt) return false;
-      
-      const daysSince = (now - lastAttempt) / (1000 * 60 * 60 * 24);
-      return daysSince >= 1 && daysSince <= 7; // Review window
+      const attempt = itemAttempts[item.id];
+      if (!attempt?.hasAttempts) return false;
+      if (attempt.lastResult !== 'Solved' && attempt.lastResult !== 'Partial') return false;
+      if (typeof attempt.lastAttemptIndex !== 'number') return false;
+      return attempt.lastAttemptIndex <= reviewWindow;
     })
     .sort((a, b) => {
       const debtA = domainDebts[a.domain] || 0;
       const debtB = domainDebts[b.domain] || 0;
-      return debtB - debtA;
+      if (debtB !== debtA) return debtB - debtA;
+      const idxA = itemAttempts[a.id]?.lastAttemptIndex ?? Number.MAX_SAFE_INTEGER;
+      const idxB = itemAttempts[b.id]?.lastAttemptIndex ?? Number.MAX_SAFE_INTEGER;
+      if (idxA !== idxB) return idxA - idxB;
+      return tieBreak(a, b);
     });
 
-  const reviewUnit = reviewCandidates.length > 0 ? {
-    unitType: UNIT_TYPES.RECALL_CHECK,
-    item: reviewCandidates[0],
-    rationale: `Reviewing ${reviewCandidates[0].domain} to reinforce learning`
+  const reviewFallback = allItems
+    .filter(item => {
+      const attempt = itemAttempts[item.id];
+      return attempt?.hasAttempts && (attempt.lastResult === 'Solved' || attempt.lastResult === 'Partial');
+    })
+    .sort((a, b) => {
+      const idxA = itemAttempts[a.id]?.lastAttemptIndex ?? Number.MAX_SAFE_INTEGER;
+      const idxB = itemAttempts[b.id]?.lastAttemptIndex ?? Number.MAX_SAFE_INTEGER;
+      if (idxA !== idxB) return idxA - idxB;
+      return tieBreak(a, b);
+    });
+
+  const reviewItem = reviewCandidates[0] || reviewFallback[0] || null;
+  const reviewUnit = reviewItem ? {
+    unitType: getUnitTypesForDomain(reviewItem.domain)[0] || UNIT_TYPES.RECALL_CHECK,
+    item: reviewItem,
+    rationale: `Reviewing ${reviewItem.domain} to reinforce learning`
   } : null;
 
   // Select Core Unit (based on focus mode)
@@ -124,9 +142,12 @@ export const orchestrateSession = async ({
     .map(item => {
       const diffValue = item.difficulty ?? 3;
       const difficulty = typeof diffValue === 'string' ? parseInt(diffValue, 10) : diffValue;
+      const attemptMeta = itemAttempts[item.id] || {};
       return {
         ...item,
-        difficulty: isNaN(difficulty) ? 3 : difficulty
+        difficulty: isNaN(difficulty) ? 3 : difficulty,
+        isOverdue: attemptMeta.isOverdue || false,
+        needsRefinement: attemptMeta.needsRefinement || false
       };
     });
 
@@ -186,7 +207,12 @@ export const orchestrateSession = async ({
       ...item,
       coverageDebt: domainDebts[item.domain] || 0
     }))
-    .sort((a, b) => b.coverageDebt - a.coverageDebt);
+    .sort((a, b) => {
+      if (b.coverageDebt !== a.coverageDebt) return b.coverageDebt - a.coverageDebt;
+      const domainCompare = (a.domain || '').localeCompare(b.domain || '');
+      if (domainCompare !== 0) return domainCompare;
+      return tieBreak(a, b);
+    });
 
   const breadthUnit = breadthCandidates.length > 0 ? {
     unitType: getUnitTypesForDomain(breadthCandidates[0].domain)[0] || UNIT_TYPES.CONCEPT_BITE,

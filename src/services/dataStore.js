@@ -72,6 +72,12 @@ export const updateSourceDatabaseDomain = async (sourceDatabaseId, domain) => {
   });
 };
 
+export const confirmSourceDatabaseSchema = async (sourceDatabaseId) => {
+  return apiFetch(`/source-databases/${sourceDatabaseId}/confirm-schema`, {
+    method: 'POST'
+  });
+};
+
 export const importCsvs = async () => {
   return apiFetch('/imports/csvs', {
     method: 'POST'

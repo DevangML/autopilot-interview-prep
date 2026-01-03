@@ -53,25 +53,29 @@ export const composeSession = ({
   coreUnit,
   breadthUnit
 }) => {
+  const allowedMinutes = [SESSION_DURATIONS.SHORT, SESSION_DURATIONS.DEFAULT, SESSION_DURATIONS.LONG];
+  const safeMinutes = allowedMinutes.includes(totalMinutes)
+    ? totalMinutes
+    : SESSION_DURATIONS.DEFAULT;
   const allocation = TIME_ALLOCATIONS[focusMode] || TIME_ALLOCATIONS[FOCUS_MODES.BALANCED];
   
   // Calculate actual time allocation (proportional scaling)
   const totalMin = allocation.review.min + allocation.core.min + allocation.breadth.min;
   const totalMax = allocation.review.max + allocation.core.max + allocation.breadth.max;
   
-  const scale = totalMinutes <= totalMin ? 0 :
-                totalMinutes >= totalMax ? 1 :
-                (totalMinutes - totalMin) / (totalMax - totalMin);
+  const scale = safeMinutes <= totalMin ? 0 :
+                safeMinutes >= totalMax ? 1 :
+                (safeMinutes - totalMin) / (totalMax - totalMin);
   
   const reviewBase = allocation.review.min + (allocation.review.max - allocation.review.min) * scale;
   const coreBase = allocation.core.min + (allocation.core.max - allocation.core.min) * scale;
   const breadthBase = allocation.breadth.min + (allocation.breadth.max - allocation.breadth.min) * scale;
   const baseTotal = reviewBase + coreBase + breadthBase;
-  const scaleToTotal = baseTotal > 0 ? totalMinutes / baseTotal : 1;
+  const scaleToTotal = baseTotal > 0 ? safeMinutes / baseTotal : 1;
   
   let reviewTime = Math.round(reviewBase * scaleToTotal);
   let coreTime = Math.round(coreBase * scaleToTotal);
-  let breadthTime = totalMinutes - reviewTime - coreTime; // Ensure exact total
+  let breadthTime = safeMinutes - reviewTime - coreTime; // Ensure exact total
   
   // Adjust for rounding so breadth stays within its range when possible
   if (breadthTime < allocation.breadth.min) {
@@ -81,7 +85,7 @@ export const composeSession = ({
     const remaining = deficit - coreReduce;
     const reviewReduce = Math.min(remaining, Math.max(0, reviewTime - allocation.review.min));
     reviewTime -= reviewReduce;
-    breadthTime = totalMinutes - reviewTime - coreTime;
+    breadthTime = safeMinutes - reviewTime - coreTime;
   } else if (breadthTime > allocation.breadth.max) {
     const excess = breadthTime - allocation.breadth.max;
     const coreGrow = Math.min(excess, Math.max(0, allocation.core.max - coreTime));
@@ -89,7 +93,7 @@ export const composeSession = ({
     const remaining = excess - coreGrow;
     const reviewGrow = Math.min(remaining, Math.max(0, allocation.review.max - reviewTime));
     reviewTime += reviewGrow;
-    breadthTime = totalMinutes - reviewTime - coreTime;
+    breadthTime = safeMinutes - reviewTime - coreTime;
   }
 
   if (breadthTime < 0) {
@@ -98,11 +102,11 @@ export const composeSession = ({
     coreTime -= coreReduce;
     const remaining = deficit - coreReduce;
     reviewTime = Math.max(0, reviewTime - remaining);
-    breadthTime = totalMinutes - reviewTime - coreTime;
+    breadthTime = safeMinutes - reviewTime - coreTime;
   }
   
   return {
-    totalMinutes,
+    totalMinutes: safeMinutes,
     focusMode,
     units: [
       {
