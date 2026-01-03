@@ -23,8 +23,11 @@ export default defineConfig({
           if (chunkInfo.name === 'main' || chunkInfo.name === 'interview-prep') {
             return 'assets/[name]-[hash].js';
           }
-          if (chunkInfo.name.includes('content') || chunkInfo.name.includes('background')) {
-            return '[name].js';
+          if (chunkInfo.name === 'background/background') {
+            return 'background.js';
+          }
+          if (chunkInfo.name === 'content/contentScript') {
+            return 'content/contentScript.js';
           }
           return 'assets/[name]-[hash].js';
         },
