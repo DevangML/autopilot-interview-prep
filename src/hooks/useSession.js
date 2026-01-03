@@ -15,6 +15,13 @@ export const useSession = () => {
   useEffect(() => {
     getActiveSession().then(saved => {
       if (saved) {
+        const hasInvalidUnit = (saved.units || []).some(unit => !unit?.item);
+        if (hasInvalidUnit) {
+          clearActiveSession();
+          setSession(null);
+          setIsActive(false);
+          return;
+        }
         setSession(saved);
         setIsActive(true);
       }
@@ -37,6 +44,19 @@ export const useSession = () => {
       currentUnitIndex: 0
     };
     
+    console.log('[useSession] Starting session with units:', {
+      focusMode,
+      unitOrder: composed.units.map((u, i) => ({
+        index: i,
+        type: u.type,
+        item: u.item?.name || 'none',
+        domain: u.item?.domain || 'none',
+        timeMinutes: u.timeMinutes
+      })),
+      currentUnit: composed.units[0]?.type || 'none',
+      currentItem: composed.units[0]?.item?.name || 'none'
+    });
+    
     setSession(newSession);
     setIsActive(true);
     saveActiveSession(newSession);
@@ -53,7 +73,8 @@ export const useSession = () => {
           ? { ...unit, completed: true, output }
           : unit
       ),
-      currentUnitIndex: session.currentUnitIndex + 1
+      currentUnitIndex: session.currentUnitIndex + 1,
+      viewUnitIndex: session.currentUnitIndex + 1 // Move view to next unit after completion
     };
     
     setSession(updated);
@@ -72,16 +93,50 @@ export const useSession = () => {
     clearActiveSession();
   }, []);
 
-  // Get current unit
+  // Navigate to a specific unit (for viewing only, not editing)
+  const navigateUnit = useCallback((direction) => {
+    if (!session) return;
+    
+    // Get current view index (defaults to currentUnitIndex if not set)
+    const currentViewIndex = session.viewUnitIndex !== undefined 
+      ? session.viewUnitIndex 
+      : session.currentUnitIndex;
+    
+    const newIndex = direction === 'next' 
+      ? currentViewIndex + 1
+      : currentViewIndex - 1;
+    
+    // Can only view completed units or current unit (can't skip ahead)
+    if (newIndex < 0 || newIndex >= session.units.length) return;
+    if (newIndex > session.currentUnitIndex) return; // Can't view future units
+    
+    const updated = {
+      ...session,
+      viewUnitIndex: newIndex // Separate index for viewing
+    };
+    
+    setSession(updated);
+    saveActiveSession(updated);
+  }, [session]);
+
+  // Get current unit (for editing)
   const currentUnit = session?.units[session.currentUnitIndex] || null;
+  
+  // Get viewed unit (for display)
+  const viewUnitIndex = session?.viewUnitIndex !== undefined ? session.viewUnitIndex : session?.currentUnitIndex;
+  const viewUnit = session?.units[viewUnitIndex] || null;
 
   return {
     session,
     isActive,
     currentUnit,
+    viewUnit,
+    viewUnitIndex: viewUnitIndex ?? session?.currentUnitIndex ?? 0,
+    canGoNext: session ? viewUnitIndex < session.currentUnitIndex : false,
+    canGoPrev: session ? viewUnitIndex > 0 : false,
     startSession,
     completeUnit,
+    navigateUnit,
     endSession
   };
 };
-

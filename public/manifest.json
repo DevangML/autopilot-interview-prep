@@ -10,20 +10,10 @@
     "tabs"
   ],
   "host_permissions": [
-    "https://*.takeuforward.org/*",
-    "https://*.leetcode.com/*",
     "https://generativelanguage.googleapis.com/*"
   ],
   "action": {
     "default_popup": "index.html"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*.takeuforward.org/*",
-        "https://*.leetcode.com/*"
-      ],
-      "js": ["content.js"]
-    }
-  ]
+  "content_scripts": []
 }

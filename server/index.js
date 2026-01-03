@@ -61,7 +61,7 @@ const runCsvImport = (email) => new Promise((resolve, reject) => {
 });
 
 const getUserById = (id) => db.prepare(
-  'select id, email, full_name, gemini_key, is_allowed from users where id = ?'
+  'select id, email, full_name, gemini_key, ai_provider, ollama_url, ollama_model, is_allowed from users where id = ?'
 ).get(id);
 
 const isEmailAllowed = (email) => {
@@ -111,7 +111,7 @@ app.post('/auth/dev', (req, res) => {
   }
   
   // Find user by email
-  const user = db.prepare('select id, email, full_name, gemini_key, is_allowed from users where lower(email) = lower(?)').get(email);
+  const user = db.prepare('select id, email, full_name, gemini_key, ai_provider, ollama_url, ollama_model, is_allowed from users where lower(email) = lower(?)').get(email);
   if (!user) {
     res.status(404).json({ error: 'User not found. Sign in with Google first to create account.' });
     return;
@@ -182,8 +182,21 @@ app.get('/me', authMiddleware, (req, res) => {
 });
 
 app.patch('/me', authMiddleware, (req, res) => {
-  const { gemini_key } = req.body || {};
-  db.prepare('update users set gemini_key = ? where id = ?').run(gemini_key || null, req.user.id);
+  const { gemini_key, ai_provider, ollama_url, ollama_model } = req.body || {};
+  db.prepare(`
+    update users 
+    set gemini_key = ?, 
+        ai_provider = ?,
+        ollama_url = ?,
+        ollama_model = ?
+    where id = ?
+  `).run(
+    gemini_key || null,
+    ai_provider || 'gemini',
+    ollama_url || null,
+    ollama_model || null,
+    req.user.id
+  );
   updateTimestamp('users', req.user.id);
   res.json(getUserById(req.user.id));
 });
@@ -213,6 +226,11 @@ app.patch('/source-databases/:id', authMiddleware, requireAllowed, (req, res) =>
     res.status(404).json({ error: 'Database not found.' });
     return;
   }
+  db.prepare(`
+    update learning_items
+    set domain = ?
+    where user_id = ? and source_database_id = ?
+  `).run(domain, req.user.id, req.params.id);
   updateTimestamp('source_databases', req.params.id);
   const updated = db.prepare(`
     select id, title, domain, confidence, item_count, filename,
@@ -262,9 +280,10 @@ app.get('/items', authMiddleware, requireAllowed, (req, res) => {
     return;
   }
   const rows = db.prepare(`
-    select id, name, domain, difficulty, pattern, completed, source_database_id
-    from learning_items
-    where user_id = ? and source_database_id = ?
+    select li.id, li.name, sd.domain as domain, li.difficulty, li.pattern, li.completed, li.source_database_id, li.raw
+    from learning_items li
+    join source_databases sd on sd.id = li.source_database_id
+    where li.user_id = ? and li.source_database_id = ?
     order by name asc
   `).all(req.user.id, sourceDatabaseId);
   res.json(rows);
@@ -325,6 +344,78 @@ app.post('/attempts', authMiddleware, requireAllowed, (req, res) => {
     ...created,
     mistake_tags: created.mistake_tags ? JSON.parse(created.mistake_tags) : []
   });
+});
+
+// External Progress Logging endpoints
+app.get('/external-attempts', authMiddleware, requireAllowed, (req, res) => {
+  const { domain, limit = 100 } = req.query;
+  const stmt = domain
+    ? db.prepare(`
+        select id, domain, topic_or_pattern, source, difficulty, outcome, learnings, reference_url, created_at
+        from external_attempts
+        where user_id = ? and domain = ?
+        order by created_at desc
+        limit ?
+      `)
+    : db.prepare(`
+        select id, domain, topic_or_pattern, source, difficulty, outcome, learnings, reference_url, created_at
+        from external_attempts
+        where user_id = ?
+        order by created_at desc
+        limit ?
+      `);
+  const rows = domain ? stmt.all(req.user.id, domain, limit) : stmt.all(req.user.id, limit);
+  res.json(rows);
+});
+
+app.post('/external-attempts', authMiddleware, requireAllowed, (req, res) => {
+  const { domain, topicOrPattern, source, difficulty, outcome, learnings, referenceUrl } = req.body || {};
+  
+  if (!domain || !source || !outcome || !learnings) {
+    res.status(400).json({ error: 'Missing required fields: domain, source, outcome, learnings.' });
+    return;
+  }
+
+  const validOutcomes = ['Solved', 'Partial', 'Stuck'];
+  if (!validOutcomes.includes(outcome)) {
+    res.status(400).json({ error: `Invalid outcome. Must be one of: ${validOutcomes.join(', ')}` });
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  db.prepare(`
+    insert into external_attempts (id, user_id, domain, topic_or_pattern, source, difficulty, outcome, learnings, reference_url)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    req.user.id,
+    domain,
+    topicOrPattern || null,
+    source,
+    typeof difficulty === 'number' ? difficulty : null,
+    outcome,
+    learnings,
+    referenceUrl || null
+  );
+
+  const created = db.prepare(`
+    select id, domain, topic_or_pattern, source, difficulty, outcome, learnings, reference_url, created_at
+    from external_attempts
+    where id = ?
+  `).get(id);
+
+  res.status(201).json(created);
+});
+
+app.delete('/external-attempts/:id', authMiddleware, requireAllowed, (req, res) => {
+  const { id } = req.params;
+  const existing = db.prepare('select id from external_attempts where id = ? and user_id = ?').get(id, req.user.id);
+  if (!existing) {
+    res.status(404).json({ error: 'External attempt not found.' });
+    return;
+  }
+  db.prepare('delete from external_attempts where id = ? and user_id = ?').run(id, req.user.id);
+  res.status(204).send();
 });
 
 app.listen(PORT, () => {

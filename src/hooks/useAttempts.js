@@ -157,7 +157,7 @@ export const useAttempts = (userId) => {
   };
 
   // Get attempts data for prioritization (includes failure streaks, recently failed, etc.)
-  const getAttemptsData = (allItems = []) => {
+  const getAttemptsData = (allItems = [], externalAttemptsData = null) => {
     const data = {};
     const itemReadinessMap = {};
     const itemMap = new Map(allItems.map(item => [item.id, item]));
@@ -232,14 +232,40 @@ export const useAttempts = (userId) => {
       };
     });
 
+    // Merge external attempts data if provided
+    const domainData = Object.entries(domainMinutesLast7d).reduce((acc, [domain, minutes]) => {
+      const externalMinutes = externalAttemptsData?.getExternalMinutesLast7d?.(domain) || 0;
+      acc[domain] = { 
+        minutesLast7d: minutes,
+        externalMinutesLast7d: externalMinutes
+      };
+      return acc;
+    }, {});
+    
+    // Add domains that only have external attempts
+    if (externalAttemptsData?.getExternalMinutesLast7d) {
+      const allDomains = new Set([
+        ...Object.keys(domainMinutesLast7d),
+        ...(externalAttemptsData.externalAttempts?.map(a => a.domain) || [])
+      ]);
+      allDomains.forEach(domain => {
+        if (!domainData[domain]) {
+          const externalMinutes = externalAttemptsData.getExternalMinutesLast7d(domain);
+          if (externalMinutes > 0) {
+            domainData[domain] = {
+              minutesLast7d: 0,
+              externalMinutesLast7d: externalMinutes
+            };
+          }
+        }
+      });
+    }
+
     return {
       itemData: data,
       itemReadinessMap,
       completedItemIds: Array.from(solvedItemIds),
-      domainData: Object.entries(domainMinutesLast7d).reduce((acc, [domain, minutes]) => {
-        acc[domain] = { minutesLast7d: minutes };
-        return acc;
-      }, {}),
+      domainData,
       maxAttemptTime,
       reviewWindow: REVIEW_ATTEMPT_WINDOW,
       getPatternReadiness: (pattern) => getPatternReadiness(pattern, allItems, itemReadinessMap)

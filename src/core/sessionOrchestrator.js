@@ -89,10 +89,13 @@ export const orchestrateSession = async ({
     domainDebts[domain] = calculateCoverageDebt({
       weeklyFloorMinutes: getDefaultWeeklyFloor(domainType),
       minutesDoneLast7d: attemptsContext?.domainData?.[domain]?.minutesLast7d || 0,
+      externalMinutesLast7d: attemptsContext?.domainData?.[domain]?.externalMinutesLast7d || 0,
       remainingUnits: domainItems.length - completed.length,
       completedUnits: completed.length
     });
   });
+
+  const uncompletedItems = allItems.filter(item => !item.completed && !completedItemIds.has(item.id));
 
   // Select Review Unit (recently completed items, attempt-order based)
   const reviewCandidates = allItems
@@ -126,7 +129,7 @@ export const orchestrateSession = async ({
     });
 
   const reviewItem = reviewCandidates[0] || reviewFallback[0] || null;
-  const reviewUnit = reviewItem ? {
+  let reviewUnit = reviewItem ? {
     unitType: getUnitTypesForDomain(reviewItem.domain)[0] || UNIT_TYPES.RECALL_CHECK,
     item: reviewItem,
     rationale: `Reviewing ${reviewItem.domain} to reinforce learning`
@@ -136,9 +139,18 @@ export const orchestrateSession = async ({
   const coreDomainType = focusMode === 'dsa-heavy' ? DOMAIN_TYPES.CODING :
                          focusMode === 'interview-heavy' ? DOMAIN_TYPES.INTERVIEW :
                          DOMAIN_TYPES.FUNDAMENTALS;
+  
+  console.log('[sessionOrchestrator] Focus mode:', focusMode, '→ Core domain type:', coreDomainType);
+  console.log('[sessionOrchestrator] Available domains:', Object.keys(databases));
+  console.log('[sessionOrchestrator] Uncompleted items count:', uncompletedItems.length);
 
-  const coreCandidates = allItems
-    .filter(item => item.domainType === coreDomainType && !item.completed && !completedItemIds.has(item.id))
+  const coreCandidates = uncompletedItems
+    .filter(item => {
+      // Use domainType that was set when items were created, or classify on the fly
+      const itemDomainType = item.domainType || classifyDomain(item.domain);
+      const matches = itemDomainType === coreDomainType && !item.completed && !completedItemIds.has(item.id);
+      return matches;
+    })
     .map(item => {
       const diffValue = item.difficulty ?? 3;
       const difficulty = typeof diffValue === 'string' ? parseInt(diffValue, 10) : diffValue;
@@ -182,7 +194,7 @@ export const orchestrateSession = async ({
     attemptsDataForPrioritization = {};
   }
 
-  const prioritizedCore = prioritizeByDifficulty(
+  let prioritizedCore = prioritizeByDifficulty(
     coreCandidates,
     coreDomainType,
     readinessData,
@@ -190,14 +202,51 @@ export const orchestrateSession = async ({
     attemptsDataForPrioritization
   );
 
-  const coreUnit = prioritizedCore.length > 0 ? {
+  let coreUnit = prioritizedCore.length > 0 ? {
     unitType: getUnitTypesForDomain(prioritizedCore[0].domain)[0] || UNIT_TYPES.CONCEPT_BITE,
     item: prioritizedCore[0],
-    rationale: `Core ${prioritizedCore[0].domain} work for deep learning`
+    rationale: `Core ${prioritizedCore[0].domain} work (${focusMode} mode)`
   } : null;
+  
+  console.log(`[sessionOrchestrator] Core candidates: ${coreCandidates.length} items of type ${coreDomainType}`);
+  console.log(`[sessionOrchestrator] Selected core unit:`, coreUnit?.item?.name || 'none', 'from domain:', coreUnit?.item?.domain || 'none');
+  
+  if (coreCandidates.length === 0 && coreDomainType !== DOMAIN_TYPES.FUNDAMENTALS) {
+    console.warn(`[sessionOrchestrator] No ${coreDomainType} items found for ${focusMode} mode. Will use fallback.`);
+  }
+  
+  console.log(`[sessionOrchestrator] Core candidates: ${coreCandidates.length} items of type ${coreDomainType}`);
+  console.log(`[sessionOrchestrator] Selected core unit:`, coreUnit?.item?.name || 'none', 'from domain:', coreUnit?.item?.domain || 'none');
+  
+  if (coreCandidates.length === 0 && coreDomainType !== DOMAIN_TYPES.FUNDAMENTALS) {
+    console.warn(`[sessionOrchestrator] No ${coreDomainType} items found for ${focusMode} mode. Will use fallback.`);
+  }
+
+  if (!coreUnit && uncompletedItems.length > 0) {
+    const fallback = [...uncompletedItems]
+      .map(item => ({
+        ...item,
+        coverageDebt: domainDebts[item.domain] || 0
+      }))
+      .sort((a, b) => {
+        if (b.coverageDebt !== a.coverageDebt) return b.coverageDebt - a.coverageDebt;
+        const domainCompare = (a.domain || '').localeCompare(b.domain || '');
+        if (domainCompare !== 0) return domainCompare;
+        return tieBreak(a, b);
+      })[0];
+
+    if (fallback) {
+      coreUnit = {
+        unitType: getUnitTypesForDomain(fallback.domain)[0] || UNIT_TYPES.CONCEPT_BITE,
+        item: fallback,
+        rationale: `No items for ${coreDomainType} focus; selecting ${fallback.domain} instead`
+      };
+      prioritizedCore = [fallback];
+    }
+  }
 
   // Select Breadth Unit (highest coverage debt, different domain)
-  const breadthCandidates = allItems
+  const breadthCandidates = uncompletedItems
     .filter(item => {
       if (item.domain === coreUnit?.item?.domain) return false;
       if (item.completed || completedItemIds.has(item.id)) return false;
@@ -214,27 +263,67 @@ export const orchestrateSession = async ({
       return tieBreak(a, b);
     });
 
-  const breadthUnit = breadthCandidates.length > 0 ? {
+  let breadthUnit = breadthCandidates.length > 0 ? {
     unitType: getUnitTypesForDomain(breadthCandidates[0].domain)[0] || UNIT_TYPES.CONCEPT_BITE,
     item: breadthCandidates[0],
     rationale: `Breadth coverage for ${breadthCandidates[0].domain}`
   } : null;
 
-  return {
-    reviewUnit: reviewUnit || {
-      unitType: UNIT_TYPES.CONCEPT_BITE,
-      item: null,
-      rationale: 'No review items available'
-    },
-    coreUnit: coreUnit || {
-      unitType: UNIT_TYPES.CONCEPT_BITE,
-      item: null,
-      rationale: 'No core items available'
-    },
-    breadthUnit: breadthUnit || {
-      unitType: UNIT_TYPES.CONCEPT_BITE,
-      item: null,
-      rationale: 'No breadth items available'
+  if (!breadthUnit) {
+    const fallbackBreadth = uncompletedItems
+      .filter(item => item.id !== coreUnit?.item?.id)
+      .map(item => ({
+        ...item,
+        coverageDebt: domainDebts[item.domain] || 0
+      }))
+      .sort((a, b) => {
+        if (b.coverageDebt !== a.coverageDebt) return b.coverageDebt - a.coverageDebt;
+        const domainCompare = (a.domain || '').localeCompare(b.domain || '');
+        if (domainCompare !== 0) return domainCompare;
+        return tieBreak(a, b);
+      })[0];
+
+    if (fallbackBreadth) {
+      breadthUnit = {
+        unitType: getUnitTypesForDomain(fallbackBreadth.domain)[0] || UNIT_TYPES.CONCEPT_BITE,
+        item: fallbackBreadth,
+        rationale: `Breadth coverage fallback within ${fallbackBreadth.domain}`
+      };
     }
+  }
+
+  if (!coreUnit || !breadthUnit) {
+    throw new Error('Unable to compose a full session. Import more items and confirm domains.');
+  }
+
+  if (!reviewItem) {
+    const reviewFallbackItem = uncompletedItems
+      .filter(item => item.id !== coreUnit.item.id && item.id !== breadthUnit.item.id)
+      .map(item => ({
+        ...item,
+        coverageDebt: domainDebts[item.domain] || 0
+      }))
+      .sort((a, b) => {
+        if (b.coverageDebt !== a.coverageDebt) return b.coverageDebt - a.coverageDebt;
+        const domainCompare = (a.domain || '').localeCompare(b.domain || '');
+        if (domainCompare !== 0) return domainCompare;
+        return tieBreak(a, b);
+      })[0];
+
+    if (!reviewFallbackItem) {
+      throw new Error('Need at least three items to build a full session.');
+    }
+
+    reviewUnit = {
+      unitType: getUnitTypesForDomain(reviewFallbackItem.domain)[0] || UNIT_TYPES.RECALL_CHECK,
+      item: reviewFallbackItem,
+      rationale: `No review history yet; starting recall in ${reviewFallbackItem.domain}`
+    };
+  }
+
+  return {
+    reviewUnit,
+    coreUnit,
+    breadthUnit
   };
 };

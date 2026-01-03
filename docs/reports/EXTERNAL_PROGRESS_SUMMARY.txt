@@ -1,0 +1,47 @@
+EXTERNAL PROGRESS LOGGING - IMPLEMENTATION SUMMARY
+
+WHAT WAS ADDED:
+• Database table: external_attempts (system-owned, append-only)
+• Backend API endpoints: GET, POST, DELETE /external-attempts
+• Frontend hook: useExternalAttempts (manages external attempt state)
+• UI Components: ProgressView, ExternalProgressLog
+• Coverage integration: External minutes weighted at 40% max impact
+• Data store methods: fetchExternalAttempts, createExternalAttempt, deleteExternalAttempt
+
+HOW IT INTEGRATES:
+• Coverage calculations: External attempts contribute to coverage debt via weighted minutes (40% weight)
+• Progress View: Shows internal vs external contributions separately
+• Session orchestration: External attempts influence coverage debt but do NOT select items
+• Readiness signals: External attempts can contribute to readiness (weighted at 40% max)
+• Revision triggers: External "Stuck" outcomes can trigger revision scheduling
+
+HOW IT DOES NOT INTEGRATE:
+• Does NOT auto-complete curated items
+• Does NOT mutate learning_items or items tables
+• Does NOT directly select session items
+• Does NOT override internal attempt history
+• Does NOT create false confidence spikes
+• Does NOT activate Custom Mode
+• Does NOT trigger automatic dataset upgrades
+
+INVARIANTS PRESERVED:
+• Zero-trust mutation: External attempts are system-owned (auto-write allowed)
+• Deterministic orchestration: External data only influences, never overrides
+• Session composition: Still exactly 3 units, same selection logic
+• Coverage debt formula: Extended but not changed (added externalMinutesLast7d parameter)
+• Domain mode system: External failures can push toward REVISION, success alone cannot push to POLISH
+• Attempt-based backoff: External attempts do NOT affect failure streaks (internal only)
+
+EDGE CASES HANDLED:
+• Empty external attempts: Gracefully handles missing data
+• Domain mismatch: External attempts filtered by domain correctly
+• Time calculations: 7-day window enforced, minutes estimated from outcomes
+• Weighting: External impact capped at 40% to prevent overpowering internal signals
+• UI state: Progress view shows clear separation of internal vs external
+• Form validation: All required fields enforced, outcome must be valid enum
+
+CONSTANTS:
+• EXTERNAL_WEIGHT: 0.4 (40% max impact)
+• External minute estimates: Solved=30min, Partial=20min, Stuck=15min
+• Seven-day window: 7 * 24 * 60 * 60 * 1000 ms
+

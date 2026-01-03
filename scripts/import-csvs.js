@@ -149,6 +149,29 @@ const DOMAIN_KEYWORDS = {
   HLD: ['hld', 'high level design', 'high-level design', 'system design', 'architecture']
 };
 
+const DOMAIN_TITLE_MAP = {
+  dsa: 'DSA',
+  oa: 'OA',
+  oop: 'OOP',
+  os: 'OS',
+  dbms: 'DBMS',
+  cn: 'CN',
+  behavioral: 'Behavioral',
+  hr: 'HR',
+  phonescreen: 'Phone Screen',
+  phone_screen: 'Phone Screen',
+  phonescreenprep: 'Phone Screen',
+  puzzles: 'Puzzles',
+  aptitude: 'Aptitude',
+  lld: 'LLD',
+  hld: 'HLD'
+};
+
+const getExplicitDomainFromTitle = (title) => {
+  const normalized = normalizeLabel(title);
+  return DOMAIN_TITLE_MAP[normalized] || null;
+};
+
 const buildNormalizedPropertySet = (headers = []) =>
   new Set(headers.map(normalizeLabel));
 
@@ -163,6 +186,11 @@ const getDomainPropertyMatch = (domain, normalizedPropertySet) => {
 };
 
 const classifyDatabase = (title, headers) => {
+  const explicitDomain = getExplicitDomainFromTitle(title);
+  if (explicitDomain) {
+    return { domain: explicitDomain, confidence: 0.9 };
+  }
+
   const titleLower = title.toLowerCase();
   const titleNormalized = titleLower.replace(/[^a-z0-9]+/g, ' ').trim();
   const titleSearch = `${titleLower} ${titleNormalized}`;
@@ -319,8 +347,14 @@ const run = async () => {
     values (@id, @user_id, @title, @filename, @domain, @confidence, @schema_hash, @schema_snapshot, @item_count)
     on conflict (user_id, filename) do update set
       title = excluded.title,
-      domain = excluded.domain,
-      confidence = excluded.confidence,
+      domain = case
+        when source_databases.domain is not null and source_databases.domain <> 'Unknown' then source_databases.domain
+        else excluded.domain
+      end,
+      confidence = case
+        when source_databases.domain is not null and source_databases.domain <> 'Unknown' then source_databases.confidence
+        else excluded.confidence
+      end,
       schema_hash = excluded.schema_hash,
       schema_snapshot = excluded.schema_snapshot,
       item_count = excluded.item_count,

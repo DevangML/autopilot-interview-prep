@@ -6,7 +6,8 @@
 export const FOCUS_MODES = {
   BALANCED: 'balanced',
   DSA_HEAVY: 'dsa-heavy',
-  INTERVIEW_HEAVY: 'interview-heavy'
+  INTERVIEW_HEAVY: 'interview-heavy',
+  CUSTOM: 'custom'
 };
 
 export const SESSION_DURATIONS = {
@@ -33,6 +34,11 @@ const TIME_ALLOCATIONS = {
     review: { min: 5, max: 8 },
     core: { min: 18, max: 28 },
     breadth: { min: 8, max: 15 }
+  },
+  [FOCUS_MODES.CUSTOM]: {
+    review: { min: 5, max: 8 },
+    core: { min: 20, max: 32 },
+    breadth: { min: 5, max: 12 }
   }
 };
 

@@ -8,6 +8,7 @@
     "dev:server": "node server/index.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
     "import:csv": "node scripts/import-csvs.js",
+    "setup:ollama": "node scripts/setup-ollama.js",
     "test": "node --test",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",

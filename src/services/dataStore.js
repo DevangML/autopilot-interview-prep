@@ -103,3 +103,21 @@ export const createAttempt = async (attemptData) => {
     body: JSON.stringify(attemptData)
   });
 };
+
+export const fetchExternalAttempts = async (domain = null) => {
+  const query = domain ? `?domain=${encodeURIComponent(domain)}` : '';
+  return apiFetch(`/external-attempts${query}`);
+};
+
+export const createExternalAttempt = async (attemptData) => {
+  return apiFetch('/external-attempts', {
+    method: 'POST',
+    body: JSON.stringify(attemptData)
+  });
+};
+
+export const deleteExternalAttempt = async (id) => {
+  return apiFetch(`/external-attempts/${id}`, {
+    method: 'DELETE'
+  });
+};

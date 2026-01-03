@@ -15,6 +15,9 @@ db.exec(`
     email text,
     full_name text,
     gemini_key text,
+    ai_provider text not null default 'gemini',
+    ollama_url text,
+    ollama_model text,
     is_allowed integer not null default 0,
     created_at text not null default (datetime('now')),
     updated_at text not null default (datetime('now'))
@@ -81,6 +84,19 @@ db.exec(`
     created_at text not null default (datetime('now'))
   );
 
+  create table if not exists external_attempts (
+    id text primary key,
+    user_id text not null,
+    domain text not null,
+    topic_or_pattern text,
+    source text not null,
+    difficulty integer,
+    outcome text not null,
+    learnings text not null,
+    reference_url text,
+    created_at text not null default (datetime('now'))
+  );
+
   create table if not exists sessions (
     id text primary key,
     user_id text not null,
@@ -104,6 +120,9 @@ db.exec(`
   create index if not exists idx_learning_items_source on learning_items (source_database_id);
   create index if not exists idx_attempts_user on attempts (user_id);
   create index if not exists idx_attempts_item on attempts (item_id);
+  create index if not exists idx_external_attempts_user on external_attempts (user_id);
+  create index if not exists idx_external_attempts_domain on external_attempts (domain);
+  create index if not exists idx_external_attempts_created on external_attempts (created_at);
 `);
 
 const ensureColumn = (table, column, type) => {

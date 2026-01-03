@@ -20,6 +20,55 @@ An intelligent interview preparation system that imports your Notion CSV exports
 - **⚡ Attempt-Based Failure Backoff** - Smart difficulty adjustment without time-based logic
 - **🔐 Schema Fingerprinting** - Detects schema changes and requires re-confirmation
 
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Node.js 18+ and npm
+- Google OAuth credentials (for authentication)
+- (Optional) Ollama for local AI (free alternative to Gemini)
+
+### Installation
+
+1. **Clone and install dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Set up Ollama (Recommended - Free & Unlimited):**
+   ```bash
+   npm run setup:ollama
+   ```
+   Or follow manual setup in `OLLAMA_SETUP.md`
+
+3. **Configure environment variables:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+
+4. **Start the application:**
+   ```bash
+   npm run dev:all
+   ```
+
+5. **Open in browser:**
+   - Frontend: http://localhost:5173
+   - Backend: http://localhost:3001
+
+### AI Provider Setup
+
+**Option 1: Ollama (Recommended - Free & Unlimited)**
+- Run `npm run setup:ollama` to auto-install
+- Or follow `OLLAMA_SETUP.md` for manual setup
+- Recommended model: `qwen2.5:7b` (best for coding/DSA)
+
+**Option 2: Gemini (Cloud API)**
+- Get API key from [Google AI Studio](https://aistudio.google.com/apikey)
+- Add to `.env` or configure in app Settings
+
+See `OLLAMA_MODEL_RECOMMENDATIONS.md` for detailed model comparison.
+
 ## 🏗️ Architecture
 
 ### Layer Structure

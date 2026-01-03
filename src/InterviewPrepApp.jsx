@@ -3,16 +3,20 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BrainCircuit, LogOut, RefreshCcw, Settings, ShieldAlert, X } from 'lucide-react';
+import { BrainCircuit, BarChart3, List, LogOut, RefreshCcw, Settings, ShieldAlert, X, CheckCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useSession } from './hooks/useSession.js';
 import { useAuth } from './hooks/useAuth.js';
 import { useProfile } from './hooks/useProfile.js';
 import { useAttempts } from './hooks/useAttempts.js';
+import { useExternalAttempts } from './hooks/useExternalAttempts.js';
 import { GoogleSignInButton } from './components/GoogleSignInButton.jsx';
 import { SessionStarter } from './components/SessionStarter.jsx';
 import { WorkUnit } from './components/WorkUnit.jsx';
+import { ProgressView } from './components/ProgressView.jsx';
+import { DetailsView } from './components/DetailsView.jsx';
 import { orchestrateSession } from './core/sessionOrchestrator.js';
-import { generateContent } from './services/gemini.js';
+import { createAIService, AI_PROVIDERS } from './services/aiService.js';
+import { checkOllamaConnection, listModels } from './services/ollama.js';
 import {
   fetchItemsBySourceDatabase,
   fetchSourceDatabases,
@@ -48,18 +52,26 @@ const buildMapping = (databases) => {
 };
 
 function InterviewPrepApp() {
-  const { session, isActive, currentUnit, startSession, completeUnit, endSession } = useSession();
+  const { session, isActive, currentUnit, viewUnit, viewUnitIndex, canGoNext, canGoPrev, startSession, completeUnit, navigateUnit, endSession } = useSession();
   const { user, isLoading: authLoading, error: authError, signInWithGoogleCredential, signOut } = useAuth();
   const { profile, isLoading: profileLoading, error: profileError, saveProfile, reload: reloadProfile } = useProfile(user);
   const { loadAttempts, recordAttempt, getAttemptsData } = useAttempts(user?.id);
+  const { loadExternalAttempts, ...externalAttemptsData } = useExternalAttempts(user?.id);
 
   const [showSettings, setShowSettings] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [isOrchestrating, setIsOrchestrating] = useState(false);
   const [error, setError] = useState(null);
   const [databases, setDatabases] = useState([]);
   const [databaseMapping, setDatabaseMapping] = useState({});
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [geminiDraft, setGeminiDraft] = useState('');
+  const [aiProvider, setAiProvider] = useState('gemini');
+  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
+  const [ollamaModel, setOllamaModel] = useState('qwen2.5:7b');
+  const [ollamaModels, setOllamaModels] = useState([]);
+  const [isCheckingOllama, setIsCheckingOllama] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importMessage, setImportMessage] = useState(null);
   const [unknownIndex, setUnknownIndex] = useState(0);
@@ -69,7 +81,12 @@ function InterviewPrepApp() {
   const isAllowed = Boolean(profile?.is_allowed);
   const envGeminiKey = import.meta.env.VITE_GEMINI_KEY || '';
   const effectiveGeminiKey = profile?.gemini_key || envGeminiKey;
-  const isConfigured = Boolean(effectiveGeminiKey);
+  const effectiveAiProvider = profile?.ai_provider || 'gemini';
+  const effectiveOllamaUrl = profile?.ollama_url || 'http://localhost:11434';
+  const effectiveOllamaModel = profile?.ollama_model || 'llama3';
+  const isConfigured = effectiveAiProvider === 'ollama' 
+    ? true // Ollama doesn't need API key
+    : Boolean(effectiveGeminiKey);
   const hasData = Object.keys(databaseMapping).length > 0;
   const unknownDatabases = databases.filter(db => db.domain === 'Unknown');
   const pendingSchemas = useMemo(
@@ -82,7 +99,36 @@ function InterviewPrepApp() {
     if (profile?.gemini_key !== undefined) {
       setGeminiDraft(profile.gemini_key || '');
     }
-  }, [profile?.gemini_key]);
+    if (profile?.ai_provider) {
+      setAiProvider(profile.ai_provider);
+    }
+    if (profile?.ollama_url) {
+      setOllamaUrl(profile.ollama_url);
+    }
+    if (profile?.ollama_model) {
+      setOllamaModel(profile.ollama_model);
+    }
+  }, [profile?.gemini_key, profile?.ai_provider, profile?.ollama_url, profile?.ollama_model]);
+
+  const loadOllamaModels = useCallback(async () => {
+    setIsCheckingOllama(true);
+    try {
+      const models = await listModels(ollamaUrl);
+      setOllamaModels(models);
+    } catch (error) {
+      console.error('Failed to load Ollama models:', error);
+      setOllamaModels([]);
+    } finally {
+      setIsCheckingOllama(false);
+    }
+  }, [ollamaUrl]);
+
+  // Load Ollama models when provider is Ollama
+  useEffect(() => {
+    if (aiProvider === 'ollama') {
+      loadOllamaModels();
+    }
+  }, [aiProvider, loadOllamaModels]);
 
   useEffect(() => {
     if (unknownIndex >= unknownDatabases.length) {
@@ -124,7 +170,7 @@ function InterviewPrepApp() {
     return { added, removed, hasSnapshot: currentList.length > 0 || confirmedList.length > 0 };
   };
 
-  const refreshDatabases = async () => {
+  const refreshDatabases = useCallback(async () => {
     if (!user?.id) return;
     setIsLoadingData(true);
     setError(null);
@@ -137,7 +183,7 @@ function InterviewPrepApp() {
     } finally {
       setIsLoadingData(false);
     }
-  };
+  }, [user?.id]);
 
   const handleImportCsvs = async () => {
     if (!window.confirm('Import all CSVs from the data/ folder into the local database?')) {
@@ -166,7 +212,8 @@ function InterviewPrepApp() {
   useEffect(() => {
     if (!user?.id || !isAllowed) return;
     loadAttempts();
-  }, [user?.id, isAllowed, loadAttempts]);
+    loadExternalAttempts();
+  }, [user?.id, isAllowed, loadAttempts, loadExternalAttempts]);
 
   useEffect(() => {
     if (!user) {
@@ -174,7 +221,7 @@ function InterviewPrepApp() {
     }
   }, [user, endSession]);
 
-  const handleStartSession = async ({ totalMinutes, focusMode }) => {
+  const handleStartSession = async ({ totalMinutes, focusMode, customIntent }) => {
     console.log('[InterviewPrepApp] handleStartSession called', { 
       totalMinutes, 
       focusMode, 
@@ -207,7 +254,9 @@ function InterviewPrepApp() {
     }
 
     if (!isConfigured) {
-      const errorMsg = 'Add your Gemini API key in Settings to start a session.';
+      const errorMsg = effectiveAiProvider === 'ollama' 
+        ? 'Configure Ollama in Settings to start a session.'
+        : 'Add your Gemini API key in Settings to start a session.';
       console.error('[InterviewPrepApp]', errorMsg);
       setError(errorMsg);
       return;
@@ -217,16 +266,28 @@ function InterviewPrepApp() {
     setError(null);
 
     try {
-      console.log('[InterviewPrepApp] Starting orchestration...');
+      console.log('[InterviewPrepApp] Starting orchestration...', { 
+        focusMode, 
+        totalMinutes,
+        domainCount: Object.keys(databaseMapping).length 
+      });
+      const attemptsContext = getAttemptsData([], externalAttemptsData);
       const units = await orchestrateSession({
         databases: databaseMapping,
         totalMinutes,
         focusMode,
-        getAttemptsData,
+        getAttemptsData: () => attemptsContext,
         fetchItems: (dbId) => fetchItemsBySourceDatabase(dbId)
       });
 
-      console.log('[InterviewPrepApp] Orchestration complete', { units });
+      console.log('[InterviewPrepApp] Orchestration complete', { 
+        focusMode,
+        reviewUnit: units.reviewUnit?.item?.name || 'none',
+        coreUnit: units.coreUnit?.item?.name || 'none',
+        coreDomain: units.coreUnit?.item?.domain || 'none',
+        breadthUnit: units.breadthUnit?.item?.name || 'none',
+        units 
+      });
       startSession({
         totalMinutes,
         focusMode,
@@ -266,9 +327,14 @@ function InterviewPrepApp() {
     }
   };
 
-  const geminiService = useMemo(() => ({
-    generateContent: (prompt, options) => generateContent(effectiveGeminiKey, prompt, options)
-  }), [effectiveGeminiKey]);
+  const aiService = useMemo(() => {
+    return createAIService({
+      provider: effectiveAiProvider,
+      geminiKey: effectiveGeminiKey,
+      ollamaUrl: effectiveOllamaUrl,
+      ollamaModel: effectiveOllamaModel
+    });
+  }, [effectiveAiProvider, effectiveGeminiKey, effectiveOllamaUrl, effectiveOllamaModel]);
 
   const handleGoogleCredential = useCallback(async (credential) => {
     setError(null);
@@ -342,10 +408,42 @@ function InterviewPrepApp() {
     );
   }
 
+  if (showDetails) {
+    return (
+      <DetailsView
+        databases={databaseMapping}
+        onClose={() => setShowDetails(false)}
+      />
+    );
+  }
+
+  if (showProgress) {
+    return (
+      <ProgressView
+        databases={databaseMapping}
+        attemptsData={getAttemptsData([], externalAttemptsData)}
+        externalAttemptsData={externalAttemptsData}
+        onClose={() => setShowProgress(false)}
+        onShowDetails={(domain) => {
+          console.log('[InterviewPrepApp] onShowDetails called with domain:', domain);
+          setShowProgress(false);
+          setShowDetails(true);
+          // Store selected domain for DetailsView
+          if (domain) {
+            setTimeout(() => {
+              const event = new CustomEvent('selectDomain', { detail: domain });
+              window.dispatchEvent(event);
+            }, 100);
+          }
+        }}
+      />
+    );
+  }
+
   if (showSettings) {
     return (
       <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
+        <div className="flex relative z-10 flex-col px-5 py-6 flex-1 overflow-hidden">
           <div className="flex gap-4 items-center mb-6">
             <button
               onClick={() => setShowSettings(false)}
@@ -359,27 +457,106 @@ function InterviewPrepApp() {
             </div>
           </div>
 
-          <div className="overflow-y-auto flex-1 space-y-6">
+          <div className="flex-1 overflow-y-auto space-y-6">
             {profileError && (
               <div className="p-3 rounded-lg border bg-red-500/10 border-red-500/20">
                 <p className="text-sm text-red-400">{profileError}</p>
               </div>
             )}
 
-            <div>
-              <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
-                Gemini API Key
-              </label>
-              <input
-                type="password"
-                className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500/40 outline-none text-gray-200"
-                value={geminiDraft}
-                onChange={e => setGeminiDraft(e.target.value)}
-                placeholder="Enter Gemini API key..."
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Stored locally for this device.
-              </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
+                  AI Provider
+                </label>
+                <select
+                  value={aiProvider}
+                  onChange={(e) => {
+                    setAiProvider(e.target.value);
+                    if (e.target.value === 'ollama') {
+                      loadOllamaModels();
+                    }
+                  }}
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500/40 outline-none text-gray-200"
+                >
+                  <option value="gemini">Gemini (Cloud API)</option>
+                  <option value="ollama">Ollama (Local, Free, Unlimited)</option>
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  {aiProvider === 'ollama' 
+                    ? 'Runs locally on your machine. No API keys needed!'
+                    : 'Requires API key from Google AI Studio'}
+                </p>
+              </div>
+
+              {aiProvider === 'gemini' ? (
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
+                    Gemini API Key
+                  </label>
+                  <input
+                    type="password"
+                    className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500/40 outline-none text-gray-200"
+                    value={geminiDraft}
+                    onChange={e => setGeminiDraft(e.target.value)}
+                    placeholder="Enter Gemini API key..."
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Get your key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Google AI Studio</a>
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
+                      Ollama URL
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500/40 outline-none text-gray-200"
+                      value={ollamaUrl}
+                      onChange={e => setOllamaUrl(e.target.value)}
+                      placeholder="http://localhost:11434"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Default: http://localhost:11434 (install from <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">ollama.com</a>)
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
+                      Model
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={ollamaModel}
+                        onChange={e => setOllamaModel(e.target.value)}
+                        className="flex-1 bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500/40 outline-none text-gray-200"
+                        disabled={isCheckingOllama}
+                      >
+                        {ollamaModels.length > 0 ? (
+                          ollamaModels.map(model => (
+                            <option key={model.name} value={model.name}>
+                              {model.name} {model.size ? `(${(model.size / 1e9).toFixed(1)}GB)` : ''}
+                            </option>
+                          ))
+                        ) : (
+                          <option value={ollamaModel}>{ollamaModel} (default)</option>
+                        )}
+                      </select>
+                      <button
+                        onClick={loadOllamaModels}
+                        disabled={isCheckingOllama}
+                        className="px-4 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs text-gray-300 disabled:opacity-50"
+                      >
+                        {isCheckingOllama ? 'Loading...' : 'Refresh'}
+                      </button>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Recommended: <strong>qwen2.5:7b</strong> (best for coding/DSA). Install with: <code className="bg-white/5 px-1 rounded">ollama pull qwen2.5:7b</code>
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="p-4 rounded-xl border bg-white/5 border-white/10">
@@ -580,7 +757,12 @@ function InterviewPrepApp() {
             </button>
             <button
               onClick={async () => {
-                await saveProfile({ gemini_key: geminiDraft });
+                await saveProfile({ 
+                  gemini_key: aiProvider === 'gemini' ? geminiDraft : null,
+                  ai_provider: aiProvider,
+                  ollama_url: aiProvider === 'ollama' ? ollamaUrl : null,
+                  ollama_model: aiProvider === 'ollama' ? ollamaModel : null
+                });
                 setShowSettings(false);
               }}
               className="flex-1 py-3.5 font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl shadow-xl hover:from-blue-500 hover:to-indigo-500"
@@ -593,9 +775,50 @@ function InterviewPrepApp() {
     );
   }
 
+  if (showDetails) {
+    return (
+      <DetailsView
+        databases={databaseMapping}
+        onClose={() => setShowDetails(false)}
+      />
+    );
+  }
+
+  if (showProgress) {
+    return (
+      <ProgressView
+        databases={databaseMapping}
+        attemptsData={getAttemptsData([], externalAttemptsData)}
+        externalAttemptsData={externalAttemptsData}
+        onClose={() => setShowProgress(false)}
+        onShowDetails={(domain) => {
+          console.log('[InterviewPrepApp] onShowDetails called with domain:', domain);
+          setShowProgress(false);
+          setShowDetails(true);
+          // Store selected domain for DetailsView
+          if (domain) {
+            setTimeout(() => {
+              const event = new CustomEvent('selectDomain', { detail: domain });
+              window.dispatchEvent(event);
+            }, 100);
+          }
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
-      <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
+    <div className="w-full h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
+      <style>{`
+        .hide-scrollbar {
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
+      <div className="flex relative z-10 flex-col px-5 py-6 flex-1 min-h-0">
         <header className="flex justify-between items-center mb-6">
           <div className="flex gap-3 items-center">
             <div className="flex justify-center items-center w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg shadow-blue-500/20">
@@ -611,15 +834,24 @@ function InterviewPrepApp() {
               </div>
             </div>
           </div>
-          <button
-            onClick={() => setShowSettings(true)}
-            className="p-2.5 rounded-lg hover:bg-white/5"
-          >
-            <Settings className="w-5 h-5 text-gray-500 hover:text-blue-400" />
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowProgress(true)}
+              className="p-2.5 rounded-lg hover:bg-white/5"
+              title="Progress View"
+            >
+              <BarChart3 className="w-5 h-5 text-gray-500 hover:text-blue-400" />
+            </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-2.5 rounded-lg hover:bg-white/5"
+            >
+              <Settings className="w-5 h-5 text-gray-500 hover:text-blue-400" />
+            </button>
+          </div>
         </header>
 
-        <main className="flex overflow-y-auto flex-col flex-1 gap-4">
+        <main className="flex overflow-y-auto flex-col flex-1 gap-4 min-h-0 hide-scrollbar">
           {error && (
             <div className="p-3 rounded-lg border bg-red-500/10 border-red-500/20">
               <p className="text-sm text-red-400">{error}</p>
@@ -639,9 +871,17 @@ function InterviewPrepApp() {
               <div className="p-4 rounded-xl border bg-white/5 border-white/10">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-xs font-semibold text-gray-400 uppercase">Session Progress</span>
-                  <span className="text-xs text-gray-500">
-                    Unit {session.currentUnitIndex + 1} of {session.units.length}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                      {session.focusMode === 'dsa-heavy' ? 'DSA-Heavy' :
+                       session.focusMode === 'interview-heavy' ? 'Interview-Heavy' :
+                       session.focusMode === 'custom' ? 'Custom' :
+                       'Balanced'}
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      Unit {session.currentUnitIndex + 1} of {session.units.length}
+                    </span>
+                  </div>
                 </div>
                 <div className="flex gap-1">
                   {session.units.map((unit, idx) => (
@@ -659,10 +899,109 @@ function InterviewPrepApp() {
                 </div>
               </div>
 
+              {/* Unit View with Navigation */}
+              {viewUnit && (
+                <div className="p-4 rounded-xl border bg-white/5 border-white/10">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (canGoPrev) {
+                            navigateUnit('prev');
+                          }
+                        }}
+                        disabled={!canGoPrev}
+                        className={`p-2 rounded-lg transition-colors ${
+                          canGoPrev
+                            ? 'bg-white/5 hover:bg-white/10 text-white cursor-pointer'
+                            : 'bg-white/5 opacity-30 cursor-not-allowed text-gray-500'
+                        }`}
+                        type="button"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-gray-400 uppercase">
+                          Unit {viewUnitIndex + 1} of {session.units.length}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded ${
+                          viewUnitIndex < session.currentUnitIndex
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : viewUnitIndex === session.currentUnitIndex
+                            ? 'bg-blue-500/20 text-blue-300'
+                            : 'bg-white/10 text-gray-400'
+                        } uppercase`}>
+                          {viewUnit.type === 'review' ? 'Review' :
+                           viewUnit.type === 'core' ? 'Core' :
+                           viewUnit.type === 'breadth' ? 'Breadth' : viewUnit.type}
+                        </span>
+                        {viewUnitIndex < session.currentUnitIndex && (
+                          <CheckCircle className="w-4 h-4 text-emerald-400" />
+                        )}
+                        {viewUnitIndex === session.currentUnitIndex && (
+                          <span className="text-xs text-blue-400 font-medium">Active</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (canGoNext) {
+                            navigateUnit('next');
+                          }
+                        }}
+                        disabled={!canGoNext}
+                        className={`p-2 rounded-lg transition-colors ${
+                          canGoNext
+                            ? 'bg-white/5 hover:bg-white/10 text-white cursor-pointer'
+                            : 'bg-white/5 opacity-30 cursor-not-allowed text-gray-500'
+                        }`}
+                        type="button"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <Clock className="w-3 h-3" />
+                      <span>{viewUnit.timeMinutes} min</span>
+                    </div>
+                  </div>
+                  
+                  {viewUnit.item && (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-base font-semibold text-white">{viewUnit.item.name || viewUnit.item.title}</div>
+                        {viewUnit.item.domain && (
+                          <div className="text-xs text-gray-400 mt-1">Domain: {viewUnit.item.domain}</div>
+                        )}
+                        {viewUnit.rationale && (
+                          <div className="text-xs text-gray-500 mt-1">{viewUnit.rationale}</div>
+                        )}
+                      </div>
+                      
+                      {viewUnitIndex < session.currentUnitIndex && viewUnit.output && (
+                        <div className="p-3 bg-white/5 rounded-lg">
+                          <div className="text-xs text-gray-400 mb-2">Your Answer:</div>
+                          <div className="text-sm text-gray-300 whitespace-pre-wrap">{viewUnit.output}</div>
+                        </div>
+                      )}
+                      
+                      {viewUnitIndex > session.currentUnitIndex && (
+                        <div className="p-3 bg-white/5 rounded-lg text-xs text-gray-500 italic text-center">
+                          Complete previous units to unlock
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <WorkUnit
                 unit={currentUnit}
                 onComplete={handleUnitComplete}
-                geminiService={geminiService}
+                geminiService={aiService}
                 config={{ geminiKey: effectiveGeminiKey }}
               />
 
@@ -682,6 +1021,15 @@ function InterviewPrepApp() {
             <SessionStarter
               onStart={handleStartSession}
               config={{ isConfigured: isConfigured && hasData }}
+              geminiService={aiService}
+              onLogExternal={() => {
+                setShowProgress(true);
+                // Small delay to ensure ProgressView is mounted, then trigger log form
+                setTimeout(() => {
+                  const event = new CustomEvent('openExternalLog');
+                  window.dispatchEvent(event);
+                }, 100);
+              }}
             />
           )}
         </main>
