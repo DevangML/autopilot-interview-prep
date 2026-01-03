@@ -1,70 +1,70 @@
-// Content script to extract problem details from TUf+ and LeetCode
+// Content script for extracting problem information from LeetCode and TakeUForward
+
 function extractProblemInfo() {
   const url = window.location.href;
-  let problemTitle = '';
-  
-  // LeetCode detection
+  let title = '';
+
   if (url.includes('leetcode.com')) {
-    // LeetCode uses various selectors for the problem title
-    const leetcodeTitle = document.querySelector('[data-cy="question-title"]') ||
-                          document.querySelector('.text-title-large') ||
-                          document.querySelector('div[class*="title"]') ||
-                          document.querySelector('h4[class*="title"]');
-    
-    if (leetcodeTitle) {
-      problemTitle = leetcodeTitle.textContent?.trim() || '';
+    // Try multiple selectors for LeetCode
+    const titleElement =
+      document.querySelector('[data-cy="question-title"]') ||
+      document.querySelector('.text-title-large') ||
+      document.querySelector('div[class*="title"]') ||
+      document.querySelector('h4[class*="title"]');
+
+    if (titleElement) {
+      title = titleElement.textContent?.trim() || '';
     }
-    
-    // Fallback: extract from URL (e.g., /problems/two-sum/ -> "Two Sum")
-    if (!problemTitle) {
-      const urlMatch = url.match(/\/problems\/([^/]+)/);
-      if (urlMatch) {
-        problemTitle = urlMatch[1]
+
+    // Fallback: extract from URL
+    if (!title) {
+      const match = url.match(/\/problems\/([^/]+)/);
+      if (match) {
+        title = match[1]
           .split('-')
-          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
           .join(' ');
       }
     }
-    
-    console.log('[Content] LeetCode problem detected:', problemTitle);
+
+    console.log('[Content] LeetCode problem detected:', title);
   } else {
-    // TUf+ detection
+    // TakeUForward or other sites
     const h1 = document.querySelector('h1');
-    const problemTitleElement = document.querySelector('.problem-title');
-    problemTitle = h1?.innerText || problemTitleElement?.innerText || '';
+    const problemTitle = document.querySelector('.problem-title');
+    title = h1?.innerText || problemTitle?.innerText || '';
   }
-  
-  // Fallback to document title
-  if (!problemTitle) {
-    problemTitle = document.title.replace(' - LeetCode', '').replace(' | TakeUForward', '').trim();
+
+  // Final fallback: use document title
+  if (!title) {
+    title = document.title
+      .replace(' - LeetCode', '')
+      .replace(' | TakeUForward', '')
+      .trim();
   }
-  
-  console.log('[Content] Extracted problem:', { title: problemTitle, url });
-  
-  return {
-    title: problemTitle,
-    url: url
-  };
+
+  console.log('[Content] Extracted problem:', { title, url });
+
+  return { title, url };
 }
 
-// Listen for messages from the popup
+// Listen for messages from the extension
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('[Content] Message received:', request);
-  
-  if (request.action === "GET_PROBLEM_INFO") {
+
+  if (request.action === 'GET_PROBLEM_INFO') {
     try {
-      const info = extractProblemInfo();
-      console.log('[Content] Extracted problem info:', info);
-      sendResponse(info);
-      // Return false because we responded synchronously
-      return false;
+      const problemInfo = extractProblemInfo();
+      console.log('[Content] Extracted problem info:', problemInfo);
+      sendResponse(problemInfo);
+      return false; // Will respond asynchronously
     } catch (error) {
       console.error('[Content] Error extracting problem info:', error);
       sendResponse({ error: error.message });
       return false;
     }
   }
-  
-  // Return false if we don't handle the message
-  return false;
+
+  return false; // Not handling this message
 });
+

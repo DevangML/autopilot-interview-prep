@@ -8,26 +8,24 @@ import { calculateCoverageDebt, getDefaultWeeklyFloor } from './coverage.js';
 import { prioritizeByDifficulty } from './difficulty.js';
 import { getUnitTypesForDomain, UNIT_TYPES } from './units.js';
 import { getDefaultDomainMode } from './domainMode.js';
-import { fetchDatabaseItems } from '../services/notion.js';
 
 /**
  * Orchestrates a daily session
  * @param {Object} params
- * @param {string} params.apiKey - Notion API key
- * @param {Object} params.databases - Map of domain name to database ID
+ * @param {Object} params.databases - Map of domain name to database ID(s)
  * @param {number} params.totalMinutes - Session duration
  * @param {string} params.focusMode - Focus mode
  * @param {Object} params.attemptsData - Recent attempts for readiness calculation
+ * @param {Function} params.fetchItems - Fetch items by source database ID
  * @returns {Promise<Object>} Composed session
  */
 export const orchestrateSession = async ({
-  apiKey,
   databases,
   totalMinutes,
   focusMode,
   attemptsData = {},
   getAttemptsData,
-  fetchItems = fetchDatabaseItems,
+  fetchItems,
   now = Date.now()
 }) => {
   // Fetch items from all databases
@@ -41,10 +39,7 @@ export const orchestrateSession = async ({
       // Deterministic merge order: item count (desc) > database ID (asc)
       // First, fetch all databases to get metadata
       return Promise.all(ids.map(async (dbId) => {
-        const items = await fetchItems(apiKey, dbId, {
-          property: 'Completed',
-          checkbox: { equals: false }
-        });
+        const items = await fetchItems(dbId);
         const stableItems = [...items].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
         return {
           dbId,
@@ -80,13 +75,14 @@ export const orchestrateSession = async ({
     ? getAttemptsData(allItems)
     : attemptsData;
   const itemAttempts = attemptsContext?.itemData || attemptsContext || {};
+  const completedItemIds = new Set(attemptsContext?.completedItemIds || []);
 
   // Calculate coverage debt for each domain
   const domainDebts = {};
   Object.keys(databases).forEach(domain => {
     const domainType = classifyDomain(domain);
     const domainItems = allItems.filter(item => item.domain === domain);
-    const completed = domainItems.filter(item => item.properties?.Completed?.checkbox);
+    const completed = domainItems.filter(item => item.completed || completedItemIds.has(item.id));
     
     domainDebts[domain] = calculateCoverageDebt({
       weeklyFloorMinutes: getDefaultWeeklyFloor(domainType),
@@ -124,10 +120,10 @@ export const orchestrateSession = async ({
                          DOMAIN_TYPES.FUNDAMENTALS;
 
   const coreCandidates = allItems
-    .filter(item => item.domainType === coreDomainType && !item.properties?.Completed?.checkbox)
+    .filter(item => item.domainType === coreDomainType && !item.completed && !completedItemIds.has(item.id))
     .map(item => {
-      const diffStr = item.properties?.['CPRD: Difficulty']?.select?.name || '3';
-      const difficulty = typeof diffStr === 'string' ? parseInt(diffStr, 10) : (diffStr || 3);
+      const diffValue = item.difficulty ?? 3;
+      const difficulty = typeof diffValue === 'string' ? parseInt(diffValue, 10) : diffValue;
       return {
         ...item,
         difficulty: isNaN(difficulty) ? 3 : difficulty
@@ -149,8 +145,7 @@ export const orchestrateSession = async ({
     // For coding domains, use pattern-level readiness if available
     if (coreDomainType === DOMAIN_TYPES.CODING && attemptsContext.getPatternReadiness) {
       coreCandidates.forEach(item => {
-        const pattern = item.properties?.['Primary Pattern']?.rich_text?.[0]?.plain_text ||
-                       item.properties?.['Pattern']?.rich_text?.[0]?.plain_text;
+        const pattern = item.pattern;
         if (pattern) {
           const patternReadiness = attemptsContext.getPatternReadiness(pattern);
           if (patternReadiness) {
@@ -184,7 +179,7 @@ export const orchestrateSession = async ({
   const breadthCandidates = allItems
     .filter(item => {
       if (item.domain === coreUnit?.item?.domain) return false;
-      if (item.properties?.Completed?.checkbox) return false;
+      if (item.completed || completedItemIds.has(item.id)) return false;
       return true;
     })
     .map(item => ({

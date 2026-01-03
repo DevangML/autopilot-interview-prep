@@ -1,48 +1,53 @@
-// Background service worker
+// Background service worker for the DSA Helper extension
+
+// Log when extension is installed
 chrome.runtime.onInstalled.addListener(() => {
   console.log('DSA Helper Extension installed');
 });
 
-// Proxy API requests to avoid CORS issues
+// Handle messages from content scripts and popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'notionApiRequest') {
     const { url, options } = request;
-    
-    // Use async/await pattern for cleaner code
+
+    // Proxy the Notion API request
     (async () => {
       try {
         const response = await fetch(url, options);
         const text = await response.text();
+
+        // Try to parse as JSON, fallback to raw text
         let data;
         try {
           data = JSON.parse(text);
         } catch {
           data = text;
         }
-        
-        // Get all headers
+
+        // Extract headers
         const headers = {};
         response.headers.forEach((value, key) => {
           headers[key] = value;
         });
-        
+
         sendResponse({
           ok: response.ok,
           status: response.status,
           statusText: response.statusText,
           data,
-          headers
+          headers,
         });
       } catch (error) {
         sendResponse({
           ok: false,
-          error: error.message || 'Unknown error'
+          error: error.message || 'Unknown error',
         });
       }
     })();
-    
-    return true; // Keep the message channel open for async response
+
+    return true; // Will respond asynchronously
   }
-  
-  return false;
+
+  return false; // Not handling this message
 });
+

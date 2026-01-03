@@ -3,61 +3,38 @@
  * Manages attempt/activity tracking (system-owned data)
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { createAttempt, fetchDatabaseItems, getDatabaseSchema } from '../services/notion.js';
+import { useCallback, useState } from 'react';
+import { createAttempt, fetchAttempts } from '../services/dataStore.js';
 
 /**
  * Hook for managing attempts
- * @param {string} apiKey - Notion API key
- * @param {string} attemptsDatabaseId - Attempts database ID
+ * @param {string} userId - Authenticated user ID
  */
-export const useAttempts = (apiKey, attemptsDatabaseId) => {
+export const useAttempts = (userId) => {
   const [attempts, setAttempts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [schemaProperties, setSchemaProperties] = useState(null);
-
-  const loadSchema = useCallback(async () => {
-    if (!apiKey || !attemptsDatabaseId) return null;
-    const schema = await getDatabaseSchema(apiKey, attemptsDatabaseId);
-    const propNames = Object.keys(schema.properties || {});
-    const propSet = new Set(propNames);
-    setSchemaProperties(propSet);
-    return propSet;
-  }, [apiKey, attemptsDatabaseId]);
 
   // Load recent attempts
-  const loadAttempts = async (itemId = null) => {
-    if (!apiKey || !attemptsDatabaseId) return;
+  const loadAttempts = useCallback(async (itemId = null) => {
+    if (!userId) return;
     
     setIsLoading(true);
     try {
-      const filter = itemId ? {
-        property: 'Item',
-        relation: { contains: itemId }
-      } : null;
-      
-      const items = await fetchDatabaseItems(apiKey, attemptsDatabaseId, filter);
+      const items = await fetchAttempts(userId, itemId);
       setAttempts(items);
     } catch (error) {
       console.error('Failed to load attempts:', error);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadSchema().catch(error => {
-      console.error('Failed to load attempts schema:', error);
-    });
-  }, [loadSchema]);
+  }, [userId]);
 
   // Create new attempt (system-owned, no confirmation needed)
   const recordAttempt = async (attemptData) => {
-    if (!apiKey || !attemptsDatabaseId) return;
+    if (!userId) return;
     
     try {
-      const schema = schemaProperties || await loadSchema();
-      const created = await createAttempt(apiKey, attemptsDatabaseId, attemptData, schema);
+      const created = await createAttempt(userId, attemptData);
       setAttempts(prev => [created, ...prev]);
       return created;
     } catch (error) {
@@ -68,9 +45,7 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
 
   // Calculate readiness metrics for an item
   const getReadiness = (itemId) => {
-    const itemAttempts = attempts.filter(a => 
-      a.properties?.Item?.relation?.[0]?.id === itemId
-    );
+    const itemAttempts = attempts.filter(a => a.item_id === itemId);
     
     if (itemAttempts.length === 0) {
       return {
@@ -82,17 +57,17 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
     }
 
     const recent = itemAttempts.slice(0, 10); // Last 10 attempts
-    const solved = recent.filter(a => a.properties?.Result?.select?.name === 'Solved');
+    const solved = recent.filter(a => a.result === 'Solved');
     const confidences = recent
       .map(a => {
-        const conf = a.properties?.Confidence?.select?.name;
+        const conf = a.confidence;
         return conf === 'High' ? 1 : conf === 'Medium' ? 0.5 : 0;
       })
       .filter(c => c !== undefined);
     const times = recent
-      .map(a => a.properties?.['Time Spent (min)']?.number)
+      .map(a => a.time_spent_min)
       .filter(t => t !== undefined);
-    const mistakes = recent.filter(a => (a.properties?.['Mistake Tags']?.multi_select || []).length > 0);
+    const mistakes = recent.filter(a => (a.mistake_tags || []).length > 0);
 
     return {
       successRate: solved.length / recent.length,
@@ -110,8 +85,8 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
   // Attempt-based only: increments on failed attempts, resets to 0 on Solved/Partial
   const getFailureStreak = (itemId) => {
     const itemAttempts = attempts
-      .filter(a => a.properties?.Item?.relation?.[0]?.id === itemId)
-      .sort((a, b) => new Date(b.created_time || 0) - new Date(a.created_time || 0));
+      .filter(a => a.item_id === itemId)
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
     
     if (itemAttempts.length === 0) {
       return 0;
@@ -121,7 +96,7 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
     // Streak resets (decays to 0) on Solved or Partial
     let streak = 0;
     for (const attempt of itemAttempts) {
-      const result = attempt.properties?.Result?.select?.name;
+      const result = attempt.result;
       
       // Solved or Partial resets streak to 0
       if (result === 'Solved' || result === 'Partial') {
@@ -140,8 +115,7 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
   // Calculate pattern-level readiness for coding domains
   const getPatternReadiness = (pattern, allItems, itemReadinessMap) => {
     const patternItems = allItems.filter(item => {
-      const itemPattern = item.properties?.['Primary Pattern']?.rich_text?.[0]?.plain_text ||
-                         item.properties?.['Pattern']?.rich_text?.[0]?.plain_text;
+      const itemPattern = item.pattern;
       return itemPattern && itemPattern.toLowerCase() === pattern.toLowerCase();
     });
 
@@ -186,23 +160,25 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
       itemReadinessMap[item.id] = getReadiness(item.id);
     });
 
+    const solvedItemIds = new Set(
+      attempts.filter(attempt => attempt.result === 'Solved').map(attempt => attempt.item_id)
+    );
+
     allItems.forEach(item => {
       const itemId = item.id;
-      const itemAttempts = attempts.filter(a => 
-        a.properties?.Item?.relation?.[0]?.id === itemId
-      );
+      const itemAttempts = attempts.filter(a => a.item_id === itemId);
       
       const recentAttempts = itemAttempts
-        .sort((a, b) => new Date(b.created_time || 0) - new Date(a.created_time || 0))
+        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
         .slice(0, 5);
       
       const lastAttempt = recentAttempts[0];
-      const lastResult = lastAttempt?.properties?.Result?.select?.name;
+      const lastResult = lastAttempt?.result;
       
       data[itemId] = {
         failureStreak: getFailureStreak(itemId),
         recentlyFailed: lastResult === 'Stuck' || lastResult === 'Skipped',
-        lastAttempt: lastAttempt?.created_time ? new Date(lastAttempt.created_time).getTime() : null,
+        lastAttempt: lastAttempt?.created_at ? new Date(lastAttempt.created_at).getTime() : null,
         avgConfidence: itemReadinessMap[itemId]?.avgConfidence || 0.5
       };
     });
@@ -210,6 +186,7 @@ export const useAttempts = (apiKey, attemptsDatabaseId) => {
     return {
       itemData: data,
       itemReadinessMap,
+      completedItemIds: Array.from(solvedItemIds),
       getPatternReadiness: (pattern) => getPatternReadiness(pattern, allItems, itemReadinessMap)
     };
   };

@@ -8,12 +8,12 @@
 
 ## 🎯 Overview
 
-An intelligent interview preparation system that automatically discovers your Notion databases, classifies learning domains, and composes personalized daily sessions. Built with **zero-trust data mutation** principles and **deterministic session composition** to ensure reliability and user control.
+An intelligent interview preparation system that imports your Notion CSV exports into a local database, classifies learning domains, and composes personalized daily sessions. Built with **deterministic session composition** to ensure reliability and user control.
 
 ### Key Features
 
-- **🔍 Automatic Database Discovery** - Discovers and classifies Notion databases by domain (DSA, OS, DBMS, etc.)
-- **🛡️ Zero-Trust Architecture** - All user data mutations require explicit confirmation
+- **🔍 CSV Import Pipeline** - Ingests Notion CSV exports into a local database
+- **🛡️ Protected Access** - Google sign-in with per-user data isolation
 - **🧠 Intelligent Session Composition** - AI-powered unit selection based on coverage debt and readiness
 - **📊 Domain Mode System** - LEARNING, REVISION, and POLISH modes for different learning phases
 - **🎯 Deterministic Behavior** - Same inputs always produce same outputs
@@ -36,8 +36,7 @@ src/
 │   ├── stuck.js        # Stuck mode handling
 │   └── sessionOrchestrator.js  # Session composition
 ├── services/          # External integrations (100-200 lines/file)
-│   ├── notion.js       # Notion API (zero-trust)
-│   ├── notionDiscovery.js  # Auto database discovery
+│   ├── dataStore.js    # Hosted DB integration
 │   ├── gemini.js       # Gemini AI service
 │   └── storage.js      # Web storage wrapper
 ├── hooks/             # React state (50-100 lines/file)
@@ -78,8 +77,7 @@ src/
 
 - Node.js 18+
 - Modern browser
-- Notion workspace with databases
-- Notion API key
+- Local API server + SQLite database
 - Gemini API key (optional, for AI features)
 
 ### Installation
@@ -91,24 +89,40 @@ src/
    npm install
    ```
 
-2. **Configure environment (optional):**
+2. **Configure environment (required):**
    ```env
-   VITE_NOTION_KEY=your_notion_api_key
-   VITE_GEMINI_KEY=your_gemini_key
+   VITE_API_URL=http://localhost:3001
+   VITE_GOOGLE_CLIENT_ID=your_google_client_id
+   VITE_GEMINI_KEY=optional_gemini_key
+   GOOGLE_CLIENT_ID=your_google_client_id
+   LOCAL_JWT_SECRET=your_random_secret
+   ALLOWED_EMAILS=devangmanjramkar@gmail.com,harshmanjramkar@gmail.com
+   DB_PATH=server/data/app.db
    ```
-   
-   Or configure via Settings UI in the app.
 
 3. **Build:**
    ```bash
    npm run build
    ```
 
-4. **Run locally:**
+4. **Import CSVs to local DB:**
    ```bash
-   npm run dev
+   npm run import:csv -- --email you@example.com
+   ```
+
+5. **Run locally:**
+   ```bash
+   npm run dev:all
    ```
    Then open the local Vite URL in your browser.
+
+### Allow the Two Users
+
+After those users sign in once, mark them as allowed in the local DB:
+
+```sql
+update users set is_allowed = 1 where email in ('user1@example.com', 'user2@example.com');
+```
 
 ### Development
 
@@ -141,14 +155,13 @@ npm run dev
 
 ## 🎓 How It Works
 
-### 1. Database Discovery
+### 1. CSV Import
 
-The system automatically discovers all Notion databases accessible to your API key:
+The system imports Notion CSV exports into a local database:
 
-- **Searches** all databases using Notion Search API
+- **Ingests** all CSVs from `data/`
 - **Classifies** by domain (DSA, OS, DBMS, etc.) using title + schema signals
-- **Validates** confidence scores and requires confirmation for uncertain cases
-- **Maps** domains to databases automatically
+- **Stores** raw rows plus normalized fields (difficulty, pattern, completion)
 
 ### 2. Session Composition
 
@@ -188,10 +201,9 @@ All user data changes follow strict patterns:
 
 ### Database Validation
 
-- Confidence thresholds prevent misclassification
-- Schema fingerprinting detects changes
-- Attempts database requires strict schema signature
-- Fails loudly on validation errors (no silent degradation)
+- Confidence scores for classification
+- Schema fingerprinting on CSV headers
+- Imports are idempotent via row hashing
 
 ## 🛠️ Extension Points
 

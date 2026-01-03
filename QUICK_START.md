@@ -1,124 +1,67 @@
-# Quick Start Guide
+# Quick Start Guide (Local DB + Google Auth)
 
-## How Database Discovery Works
+## Overview
 
-### ✅ Automatic Discovery (No Manual IDs Needed!)
+This app no longer connects to Notion directly. You export your Notion databases as CSV files once, import them into a local SQLite database, and run the app against the local API.
 
-The system **automatically discovers** databases for all domains:
+## 1) Create Google OAuth Credentials
 
-1. **Learning Sheets** (DSA, OS, DBMS, CN, OOP, etc.):
-   - System searches all your Notion databases
-   - Classifies by domain based on title and properties
-   - **You don't need to enter database IDs manually!**
-   - Just make sure your database titles include domain keywords
+1. Create OAuth credentials in Google Cloud.
+2. Add `http://localhost:5173` to the authorized origins.
+3. Copy the OAuth Client ID.
 
-2. **Attempts Database**:
-   - System automatically finds the database with:
-     - `Item` (relation property)
-     - `Result` (select with "Solved" option)
-     - `Time Spent` or `Time Spent (min)` (number property)
+## 2) Configure Environment
 
-### What You Need to Do
+Create `.env`:
 
-1. **Create an Attempts Database** (see below)
-2. **Name your learning databases clearly** (e.g., "DSA Problems", "OS Concepts")
-3. **Open the web app** - it will discover everything automatically!
+```env
+VITE_API_URL=http://localhost:3001
+VITE_GOOGLE_CLIENT_ID=your_google_client_id
+VITE_GEMINI_KEY=optional_gemini_key
+GOOGLE_CLIENT_ID=your_google_client_id
+LOCAL_JWT_SECRET=your_random_secret
+ALLOWED_EMAILS=devangmanjramkar@gmail.com,harshmanjramkar@gmail.com
+DB_PATH=server/data/app.db
+```
 
-## Creating Your Attempts Database
+## 3) Export Notion CSVs
 
-### Quick Method: Manual Creation
+For each Notion database:
 
-1. **Create new database in Notion:**
-   - Click "+ New" → "Database" → "New database"
-   - Name it: **"Attempts"**
+1. Open the database in Notion.
+2. Click **•••** → **Export** → **CSV**.
+3. Save the CSV into `data/` (one file per database).
 
-2. **Add these properties:**
+## 4) Import CSVs
 
-   | Property | Type | Notes |
-   |----------|------|-------|
-   | **Item** | Relation | Links to learning databases |
-   | **Result** | Select | **Must include "Solved"** |
-   | **Time Spent** | Number | Or "Time Spent (min)" |
-
-3. **Configure Result options:**
-   - ✅ **Solved** (required!)
-   - ⚠️ Partial
-   - ❌ Failed
-   - ⏭️ Skipped
-
-4. **Get the Database ID:**
-   - Open `scripts/get-database-id.html` in your browser
-   - Paste your Notion database URL
-   - Copy the extracted ID
-
-### Alternative: Use Helper Script
+Run the importer (use the email you sign in with):
 
 ```bash
-node scripts/create-attempts-database.js YOUR_NOTION_API_KEY
+npm run import:csv -- --email you@example.com
 ```
 
-This creates the database and prints the ID for you.
+The importer:
+- Stores every row locally
+- Classifies each database by domain
+- Is idempotent (safe to run multiple times)
 
-## Getting Database IDs
+## 5) Run the App
 
-### Method 1: Browser Helper (Easiest)
-
-1. Open `scripts/get-database-id.html` in your browser
-2. Paste your Notion database URL
-3. Click "Extract Database ID"
-4. Copy the ID
-
-### Method 2: From URL
-
-Your Notion URL looks like:
-```
-https://www.notion.so/workspace/abc123def456...?v=...
+```bash
+npm run dev:all
 ```
 
-The database ID is the 32-character hex string. Format it as UUID:
+Open `http://localhost:5173`, sign in with Google, and start a session.
+
+## Notes
+
+- If a database is tagged as **Unknown**, open Settings and assign a domain.
+- Attempts are stored in the local database automatically.
+
+## Allow the Two Users
+
+After each user signs in once, allow them in the local DB:
+
+```bash
+sqlite3 server/data/app.db "update users set is_allowed = 1 where email in ('user1@example.com','user2@example.com');"
 ```
-abc123de-f456-7890-abcd-ef1234567890
-```
-
-## Configuration
-
-### Web App
-
-- **Notion API Key**: Required
-- **Gemini API Key**: Required (for AI features)
-- **Database IDs**: Automatically discovered! 🎉
-
-## Troubleshooting
-
-### "No attempts database found"
-
-✅ **Solution:**
-- Create the database with all required properties
-- Ensure "Result" select includes "Solved" option
-- Check API key has access to the database
-
-### "Database not discovered for domain X"
-
-✅ **Solution:**
-- Include domain keywords in database title:
-  - DSA: "DSA", "algorithm", "leetcode", "coding"
-  - OS: "OS", "operating system", "process"
-  - DBMS: "DBMS", "database", "SQL"
-- Run schema upgrade to add CPRD columns (increases confidence)
-
-### "Multiple attempts databases found"
-
-✅ **Solution:**
-- You can only have **one** attempts database
-- Archive or delete the extra ones
-
-## Next Steps
-
-1. ✅ Create attempts database (see above)
-2. ✅ Open the web app
-3. ✅ Enter your API keys in Settings
-4. ✅ System will auto-discover all databases
-5. ✅ Review mapping if needed (for low-confidence matches)
-6. ✅ Start your first session!
-
----

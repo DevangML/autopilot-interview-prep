@@ -1,0 +1,268 @@
+#!/usr/bin/env node
+
+import 'dotenv/config';
+import crypto from 'crypto';
+import cors from 'cors';
+import express from 'express';
+import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
+import path from 'path';
+import { execFile } from 'child_process';
+import { db, updateTimestamp } from './db.js';
+
+const PORT = process.env.API_PORT || 3001;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const JWT_SECRET = process.env.LOCAL_JWT_SECRET;
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
+const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || 'devangmanjramkar@gmail.com,harshmanjramkar@gmail.com')
+  .split(',')
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+
+if (!GOOGLE_CLIENT_ID) {
+  throw new Error('Missing GOOGLE_CLIENT_ID.');
+}
+
+if (!JWT_SECRET) {
+  throw new Error('Missing LOCAL_JWT_SECRET.');
+}
+
+const oauthClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+const app = express();
+
+app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
+app.use(express.json({ limit: '2mb' }));
+
+if (ALLOWED_EMAILS.length > 0) {
+  const placeholders = ALLOWED_EMAILS.map(() => '?').join(', ');
+  db.prepare(`update users set is_allowed = 1 where lower(email) in (${placeholders})`).run(...ALLOWED_EMAILS);
+}
+
+const signToken = (user) => jwt.sign(
+  { sub: user.id, email: user.email },
+  JWT_SECRET,
+  { expiresIn: '30d' }
+);
+
+const runCsvImport = (email) => new Promise((resolve, reject) => {
+  const scriptPath = path.resolve(process.cwd(), 'scripts/import-csvs.js');
+  execFile(
+    process.execPath,
+    [scriptPath, '--email', email, '--make-tables'],
+    { cwd: process.cwd() },
+    (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message));
+        return;
+      }
+      resolve({ stdout, stderr });
+    }
+  );
+});
+
+const getUserById = (id) => db.prepare(
+  'select id, email, full_name, gemini_key, is_allowed from users where id = ?'
+).get(id);
+
+const isEmailAllowed = (email) => {
+  if (!email) return false;
+  return ALLOWED_EMAILS.includes(email.trim().toLowerCase());
+};
+
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) {
+    res.status(401).json({ error: 'Missing auth token.' });
+    return;
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = getUserById(payload.sub);
+    if (!user) {
+      res.status(401).json({ error: 'Invalid auth token.' });
+      return;
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid auth token.' });
+  }
+};
+
+const requireAllowed = (req, res, next) => {
+  if (!req.user?.is_allowed) {
+    res.status(403).json({ error: 'Access not allowed.' });
+    return;
+  }
+  next();
+};
+
+app.post('/auth/google', async (req, res) => {
+  const { idToken } = req.body || {};
+  if (!idToken) {
+    res.status(400).json({ error: 'Missing idToken.' });
+    return;
+  }
+
+  try {
+    const ticket = await oauthClient.verifyIdToken({
+      idToken,
+      audience: GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload();
+    if (!payload?.sub || !payload?.email) {
+      res.status(401).json({ error: 'Invalid Google token.' });
+      return;
+    }
+
+    const allowed = isEmailAllowed(payload.email);
+    const existing = getUserById(payload.sub);
+    if (!existing) {
+      db.prepare(`
+        insert into users (id, email, full_name, is_allowed)
+        values (?, ?, ?, ?)
+      `).run(payload.sub, payload.email, payload.name || null, allowed ? 1 : 0);
+    } else {
+      db.prepare(`
+        update users set email = ?, full_name = ?, is_allowed = ? where id = ?
+      `).run(payload.email, payload.name || null, allowed ? 1 : 0, payload.sub);
+      updateTimestamp('users', payload.sub);
+    }
+
+    const user = getUserById(payload.sub);
+    const token = signToken(user);
+    res.json({ token, user });
+  } catch (err) {
+    res.status(401).json({ error: 'Google token verification failed.' });
+  }
+});
+
+app.get('/me', authMiddleware, (req, res) => {
+  res.json(req.user);
+});
+
+app.patch('/me', authMiddleware, (req, res) => {
+  const { gemini_key } = req.body || {};
+  db.prepare('update users set gemini_key = ? where id = ?').run(gemini_key || null, req.user.id);
+  updateTimestamp('users', req.user.id);
+  res.json(getUserById(req.user.id));
+});
+
+app.get('/source-databases', authMiddleware, requireAllowed, (req, res) => {
+  const rows = db.prepare(`
+    select id, title, domain, confidence, item_count, filename
+    from source_databases
+    where user_id = ?
+    order by title asc
+  `).all(req.user.id);
+  res.json(rows);
+});
+
+app.patch('/source-databases/:id', authMiddleware, requireAllowed, (req, res) => {
+  const { domain } = req.body || {};
+  if (!domain) {
+    res.status(400).json({ error: 'Missing domain.' });
+    return;
+  }
+  const stmt = db.prepare(`
+    update source_databases set domain = ? where id = ? and user_id = ?
+  `);
+  const info = stmt.run(domain, req.params.id, req.user.id);
+  if (info.changes === 0) {
+    res.status(404).json({ error: 'Database not found.' });
+    return;
+  }
+  updateTimestamp('source_databases', req.params.id);
+  const updated = db.prepare(`
+    select id, title, domain, confidence, item_count, filename
+    from source_databases
+    where id = ?
+  `).get(req.params.id);
+  res.json(updated);
+});
+
+app.post('/imports/csvs', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const result = await runCsvImport(req.user.email);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'CSV import failed.' });
+  }
+});
+
+app.get('/items', authMiddleware, requireAllowed, (req, res) => {
+  const sourceDatabaseId = req.query.sourceDatabaseId;
+  if (!sourceDatabaseId) {
+    res.status(400).json({ error: 'Missing sourceDatabaseId.' });
+    return;
+  }
+  const rows = db.prepare(`
+    select id, name, domain, difficulty, pattern, completed, source_database_id
+    from items
+    where user_id = ? and source_database_id = ?
+    order by name asc
+  `).all(req.user.id, sourceDatabaseId);
+  res.json(rows);
+});
+
+app.get('/attempts', authMiddleware, requireAllowed, (req, res) => {
+  const itemId = req.query.itemId;
+  const stmt = itemId
+    ? db.prepare(`
+        select id, item_id, result, confidence, mistake_tags, time_spent_min, hint_used, created_at
+        from attempts
+        where user_id = ? and item_id = ?
+        order by created_at desc
+      `)
+    : db.prepare(`
+        select id, item_id, result, confidence, mistake_tags, time_spent_min, hint_used, created_at
+        from attempts
+        where user_id = ?
+        order by created_at desc
+      `);
+  const rows = itemId ? stmt.all(req.user.id, itemId) : stmt.all(req.user.id);
+  const normalized = rows.map(row => ({
+    ...row,
+    mistake_tags: row.mistake_tags ? JSON.parse(row.mistake_tags) : []
+  }));
+  res.json(normalized);
+});
+
+app.post('/attempts', authMiddleware, requireAllowed, (req, res) => {
+  const { itemId, result, confidence, mistakeTags, timeSpent, hintUsed } = req.body || {};
+  if (!itemId) {
+    res.status(400).json({ error: 'Missing itemId.' });
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  db.prepare(`
+    insert into attempts (id, user_id, item_id, result, confidence, mistake_tags, time_spent_min, hint_used)
+    values (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    req.user.id,
+    itemId,
+    result || 'Solved',
+    confidence || null,
+    JSON.stringify(mistakeTags || []),
+    typeof timeSpent === 'number' ? timeSpent : null,
+    hintUsed ? 1 : 0
+  );
+
+  const created = db.prepare(`
+    select id, item_id, result, confidence, mistake_tags, time_spent_min, hint_used, created_at
+    from attempts
+    where id = ?
+  `).get(id);
+
+  res.status(201).json({
+    ...created,
+    mistake_tags: created.mistake_tags ? JSON.parse(created.mistake_tags) : []
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Local API running at http://localhost:${PORT}`);
+});

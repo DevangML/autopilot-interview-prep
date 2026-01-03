@@ -1,139 +1,162 @@
 /**
- * Interview Prep Platform App
- * Opens in separate window from extension button
+ * Interview Prep Platform App (Local DB + Google Auth)
  */
 
-import { useState, useEffect } from 'react';
-import { BrainCircuit, Settings, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BrainCircuit, LogOut, RefreshCcw, Settings, ShieldAlert, X } from 'lucide-react';
 import { useSession } from './hooks/useSession.js';
-import { useConfig } from './hooks/useConfig.js';
+import { useAuth } from './hooks/useAuth.js';
+import { useProfile } from './hooks/useProfile.js';
+import { useAttempts } from './hooks/useAttempts.js';
+import { GoogleSignInButton } from './components/GoogleSignInButton.jsx';
 import { SessionStarter } from './components/SessionStarter.jsx';
 import { WorkUnit } from './components/WorkUnit.jsx';
-import { UpgradeFlow } from './components/UpgradeFlow.jsx';
 import { orchestrateSession } from './core/sessionOrchestrator.js';
 import { generateContent } from './services/gemini.js';
-import { prepareDatabaseMapping, discoverDatabases, searchAllDatabases, classifyDatabase } from './services/notionDiscovery.js';
-import { DatabaseMappingConfirmation } from './components/DatabaseMappingConfirmation.jsx';
-import { AttemptsDatabaseSetup } from './components/AttemptsDatabaseSetup.jsx';
-import { addItemRelationToAttemptsDB } from './services/notion.js';
-import { useAttempts } from './hooks/useAttempts.js';
+import {
+  fetchItemsBySourceDatabase,
+  fetchSourceDatabases,
+  importCsvs,
+  updateSourceDatabaseDomain
+} from './services/dataStore.js';
+import { DOMAINS } from './core/domains.js';
+
+const DOMAIN_OPTIONS = Object.values(DOMAINS).map(domain => domain.name);
+
+const buildMapping = (databases) => {
+  const mapping = {};
+  const eligible = databases.filter(db => db.domain && db.domain !== 'Unknown');
+
+  const grouped = eligible.reduce((acc, db) => {
+    acc[db.domain] = acc[db.domain] || [];
+    acc[db.domain].push(db);
+    return acc;
+  }, {});
+
+  Object.entries(grouped).forEach(([domain, dbs]) => {
+    const sorted = [...dbs].sort((a, b) => {
+      if ((b.item_count || 0) !== (a.item_count || 0)) {
+        return (b.item_count || 0) - (a.item_count || 0);
+      }
+      return a.id.localeCompare(b.id);
+    });
+    mapping[domain] = sorted.map(db => db.id);
+  });
+
+  return mapping;
+};
 
 function InterviewPrepApp() {
-  const { config, isLoading: configLoading, isConfigured, updateConfig } = useConfig({
-    requiredKeys: ['notionKey', 'geminiKey']
-  });
   const { session, isActive, currentUnit, startSession, completeUnit, endSession } = useSession();
+  const { user, isLoading: authLoading, error: authError, signInWithGoogleCredential, signOut } = useAuth();
+  const { profile, isLoading: profileLoading, error: profileError, saveProfile, reload: reloadProfile } = useProfile(user);
+  const { loadAttempts, recordAttempt, getAttemptsData } = useAttempts(user?.id);
+
   const [showSettings, setShowSettings] = useState(false);
-  const [showUpgrade, setShowUpgrade] = useState(false);
   const [isOrchestrating, setIsOrchestrating] = useState(false);
   const [error, setError] = useState(null);
-  const [databaseMapping, setDatabaseMapping] = useState(null);
-  const [discoveryData, setDiscoveryData] = useState(null);
-  const [mappingProposal, setMappingProposal] = useState(null);
-  const [showMappingConfirmation, setShowMappingConfirmation] = useState(false);
-  const [showAttemptsSetup, setShowAttemptsSetup] = useState(false);
-  const [attemptsSetupError, setAttemptsSetupError] = useState(null);
-  const { loadAttempts, recordAttempt, getAttemptsData } = useAttempts(
-    config.notionKey,
-    config.attemptsDatabaseId
-  );
+  const [databases, setDatabases] = useState([]);
+  const [databaseMapping, setDatabaseMapping] = useState({});
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [geminiDraft, setGeminiDraft] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState(null);
 
-  // Load database mapping proposal on config change
+  const isAllowed = Boolean(profile?.is_allowed);
+  const envGeminiKey = import.meta.env.VITE_GEMINI_KEY || '';
+  const effectiveGeminiKey = profile?.gemini_key || envGeminiKey;
+  const isConfigured = Boolean(effectiveGeminiKey);
+  const hasData = Object.keys(databaseMapping).length > 0;
+  const unknownDatabases = databases.filter(db => db.domain === 'Unknown');
+
   useEffect(() => {
-    if (config.notionKey && !databaseMapping) {
-      // Get previous fingerprints from storage
-      const previousFingerprints = JSON.parse(
-        localStorage.getItem('notionSchemaFingerprints') || '{}'
-      );
-      
-      prepareDatabaseMapping(config.notionKey, previousFingerprints)
-        .then(({ proposal, discovery }) => {
-          setDiscoveryData(discovery);
-          
-          // Block session orchestration if fingerprint changed (mandatory re-analysis)
-          if (proposal.fingerprintChanged) {
-            setMappingProposal(proposal);
-            setShowMappingConfirmation(true);
-            setError('Schema fingerprint changed. Re-confirmation required.');
-            return;
-          }
-          
-          // Check if confirmation required
-          const hasWarnings = Object.keys(proposal.warnings).length > 0;
-          const hasBlocks = proposal.blocks.length > 0;
-          
-          if (hasWarnings || hasBlocks) {
-            setMappingProposal(proposal);
-            setShowMappingConfirmation(true);
-          } else {
-            // Auto-accept high confidence mappings
-            setDatabaseMapping(proposal.autoAccept);
-            if (proposal.attemptsDatabase) {
-              updateConfig({ attemptsDatabaseId: proposal.attemptsDatabase.id });
-              // Store fingerprints for change detection
-              const fingerprints = { ...previousFingerprints };
-              discovery.all.forEach(db => {
-                fingerprints[db.id] = db.schemaFingerprint;
-              });
-              localStorage.setItem('notionSchemaFingerprints', JSON.stringify(fingerprints));
-            }
-          }
-        })
-        .catch(err => {
-          console.error('Database discovery failed:', err);
-          // Check if error is about missing attempts database
-          if (err.message.includes('No attempts database found') || err.message.includes('attempts database')) {
-            setShowAttemptsSetup(true);
-            setAttemptsSetupError(err.message);
-          } else if (err.message.includes('API key') || err.message.includes('Invalid') || err.message.includes('Network error')) {
-            // Show clear error for API key or network issues
-            setError(err.message);
-          } else {
-            setError(`Database discovery failed: ${err.message}`);
-          }
-        });
+    if (profile?.gemini_key !== undefined) {
+      setGeminiDraft(profile.gemini_key || '');
     }
-  }, [config.notionKey]);
+  }, [profile?.gemini_key]);
 
-  // Check if settings needed
+  const refreshDatabases = async () => {
+    if (!user?.id) return;
+    setIsLoadingData(true);
+    setError(null);
+    try {
+      const dbs = await fetchSourceDatabases(user.id);
+      setDatabases(dbs);
+      setDatabaseMapping(buildMapping(dbs));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
+
+  const handleImportCsvs = async () => {
+    if (!window.confirm('Import all CSVs from the data/ folder into the local database?')) {
+      return;
+    }
+    setIsImporting(true);
+    setImportMessage(null);
+    setError(null);
+    try {
+      await importCsvs();
+      setImportMessage('CSV import completed.');
+      await refreshDatabases();
+      await loadAttempts();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   useEffect(() => {
-    if (!configLoading && !isConfigured) {
-      setShowSettings(true);
-    }
-  }, [configLoading, isConfigured]);
+    if (!user?.id || !isAllowed) return;
+    refreshDatabases();
+  }, [user?.id, isAllowed]);
 
-  // Load attempts data once attempts DB is known
   useEffect(() => {
-    if (config.notionKey && config.attemptsDatabaseId) {
-      loadAttempts();
-    }
-  }, [config.notionKey, config.attemptsDatabaseId, loadAttempts]);
+    if (!user?.id || !isAllowed) return;
+    loadAttempts();
+  }, [user?.id, isAllowed, loadAttempts]);
 
-  // Handle session start
+  useEffect(() => {
+    if (!user) {
+      endSession();
+    }
+  }, [user, endSession]);
+
   const handleStartSession = async ({ totalMinutes, focusMode }) => {
-    if (!databaseMapping || Object.keys(databaseMapping).length === 0) {
-      setError('No databases discovered. Please check your Notion API key and ensure databases are accessible.');
+    if (!hasData) {
+      setError('No imported databases found. Import CSVs into the local DB first.');
+      return;
+    }
+
+    if (!isConfigured) {
+      setError('Add your Gemini API key in Settings to start a session.');
       return;
     }
 
     setIsOrchestrating(true);
     setError(null);
-    
+
     try {
-      // Use discovered database mapping
       const units = await orchestrateSession({
-        apiKey: config.notionKey,
-        databases: databaseMapping, // Auto-discovered mapping
+        databases: databaseMapping,
         totalMinutes,
         focusMode,
         getAttemptsData,
+        fetchItems: (dbId) => fetchItemsBySourceDatabase(user.id, dbId),
         now: Date.now()
       });
 
       startSession({
         totalMinutes,
         focusMode,
-        units
+        units: {
+          review: units.reviewUnit,
+          core: units.coreUnit,
+          breadth: units.breadthUnit
+        }
       });
     } catch (err) {
       setError(err.message);
@@ -142,7 +165,6 @@ function InterviewPrepApp() {
     }
   };
 
-  // Handle unit completion
   const handleUnitComplete = async (completion) => {
     try {
       const normalized = typeof completion === 'string'
@@ -165,224 +187,197 @@ function InterviewPrepApp() {
     }
   };
 
-  // Gemini service wrapper
-  const geminiService = {
-    generateContent: (prompt, options) => generateContent(config.geminiKey, prompt, options)
-  };
+  const geminiService = useMemo(() => ({
+    generateContent: (prompt, options) => generateContent(effectiveGeminiKey, prompt, options)
+  }), [effectiveGeminiKey]);
 
-  // Attempts database setup view
-  if (showAttemptsSetup) {
+  const handleGoogleCredential = useCallback(async (credential) => {
+    setError(null);
+    try {
+      await signInWithGoogleCredential(credential);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [signInWithGoogleCredential]);
+
+  if (authLoading || profileLoading) {
     return (
-      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
-          <div className="flex gap-4 items-center mb-6">
-            <button
-              onClick={() => {
-                setShowAttemptsSetup(false);
-                setAttemptsSetupError(null);
-              }}
-              className="p-2 rounded-lg hover:bg-white/5"
-            >
-              <X className="w-5 h-5 text-gray-400" />
-            </button>
+      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex items-center justify-center">
+        <div className="text-sm text-gray-400">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex items-center justify-center">
+        <div className="w-full max-w-sm p-6 rounded-2xl border border-white/10 bg-white/5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex justify-center items-center w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg shadow-blue-500/20">
+              <BrainCircuit className="w-5 h-5 text-white" />
+            </div>
             <div>
-              <h2 className="text-lg font-semibold">Setup Required</h2>
-              <p className="mt-0.5 text-xs text-gray-500">Create your attempts database</p>
+              <h1 className="text-lg font-bold tracking-tight">Interview Prep</h1>
+              <p className="text-xs text-gray-400">Sign in to continue</p>
             </div>
           </div>
-          <div className="overflow-y-auto flex-1">
-            <AttemptsDatabaseSetup
-              apiKey={config.notionKey}
-              onDatabaseCreated={async (databaseId) => {
-                updateConfig({ attemptsDatabaseId: databaseId });
-                setShowAttemptsSetup(false);
-                setAttemptsSetupError(null);
-                
-                try {
-                  const previousFingerprints = JSON.parse(
-                    localStorage.getItem('notionSchemaFingerprints') || '{}'
-                  );
-                  
-                  // Step 1: Discover learning databases (this will fail on attempts DB check, but we can get learning sheets)
-                  let learningDatabases = [];
-                  try {
-                    const { discovery } = await prepareDatabaseMapping(config.notionKey, previousFingerprints);
-                    learningDatabases = discovery.learningSheets || [];
-                  } catch (discoveryError) {
-                    // Discovery failed because attempts DB doesn't have Item relation yet
-                    // Try to get learning databases directly
-                    const allDBs = await searchAllDatabases(config.notionKey);
-                    learningDatabases = allDBs
-                      .map(db => classifyDatabase(db))
-                      .filter(db => db.isLearningSheet && !db.isAttemptsDB);
-                  }
-                  
-                  // Step 2: Add Item relation if we have a learning database
-                  if (learningDatabases.length > 0) {
-                    const firstLearningDB = learningDatabases[0];
-                    try {
-                      await addItemRelationToAttemptsDB(
-                        config.notionKey,
-                        databaseId,
-                        firstLearningDB.id
-                      );
-                    } catch (relationError) {
-                      console.warn('Failed to add Item relation:', relationError);
-                      // Non-fatal - user can add it manually later
-                    }
-                  }
-                  
-                  // Step 3: Now trigger full discovery again (should work now)
-                  const { proposal, discovery: fullDiscovery } = await prepareDatabaseMapping(
-                    config.notionKey,
-                    previousFingerprints
-                  );
-                  
-                  setDiscoveryData(fullDiscovery);
-                  setDatabaseMapping(proposal.autoAccept);
-                  if (proposal.attemptsDatabase) {
-                    updateConfig({ attemptsDatabaseId: proposal.attemptsDatabase.id });
-                  }
-                  
-                  // Store fingerprints
-                  const fingerprints = { ...previousFingerprints };
-                  fullDiscovery.all?.forEach(db => {
-                    fingerprints[db.id] = db.schemaFingerprint;
-                  });
-                  localStorage.setItem('notionSchemaFingerprints', JSON.stringify(fingerprints));
-                } catch (err) {
-                  console.error('Post-creation setup failed:', err);
-                  // Database was created successfully, but setup failed
-                  setError(`Database created successfully! However, some setup steps failed: ${err.message}. You may need to manually add the Item relation property.`);
-                }
-              }}
-              onCancel={() => {
-                setShowAttemptsSetup(false);
-                setAttemptsSetupError(null);
-              }}
-            />
+          <GoogleSignInButton onCredential={handleGoogleCredential} />
+          {(error || authError) && (
+            <div className="mt-3 text-xs text-red-400">{error || authError}</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAllowed) {
+    return (
+      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex items-center justify-center">
+        <div className="w-full max-w-md p-6 rounded-2xl border border-white/10 bg-white/5">
+          <div className="flex items-center gap-3 mb-4 text-amber-400">
+            <ShieldAlert className="w-5 h-5" />
+            <div>
+              <h1 className="text-lg font-semibold">Access Required</h1>
+              <p className="text-xs text-gray-400">This workspace is locked to two users.</p>
+            </div>
+          </div>
+          <p className="text-sm text-gray-300">
+            Ask the admin to allow your email, then refresh.
+          </p>
+          <div className="flex gap-2 mt-4">
+            <button
+              onClick={() => reloadProfile()}
+              className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-sm"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => signOut()}
+              className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-sm"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  // Database mapping confirmation view
-  if (showMappingConfirmation && mappingProposal) {
-    return (
-      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
-          <div className="flex gap-4 items-center mb-6">
-            <button
-              onClick={() => {
-                setShowMappingConfirmation(false);
-                setMappingProposal(null);
-              }}
-              className="p-2 rounded-lg hover:bg-white/5"
-            >
-              <X className="w-5 h-5 text-gray-400" />
-            </button>
-            <div>
-              <h2 className="text-lg font-semibold">Database Mapping</h2>
-              <p className="mt-0.5 text-xs text-gray-500">Review and confirm database mappings</p>
-            </div>
-          </div>
-          <div className="overflow-y-auto flex-1">
-            <DatabaseMappingConfirmation
-              proposal={mappingProposal}
-              onConfirm={(confirmedMapping) => {
-                setDatabaseMapping(confirmedMapping);
-                if (mappingProposal.attemptsDatabase) {
-                  updateConfig({ attemptsDatabaseId: mappingProposal.attemptsDatabase.id });
-                  // Store fingerprint for change detection
-                  const previousFingerprints = JSON.parse(
-                    localStorage.getItem('notionSchemaFingerprints') || '{}'
-                  );
-                  discoveryData?.all?.forEach(db => {
-                    previousFingerprints[db.id] = db.schemaFingerprint;
-                  });
-                  localStorage.setItem('notionSchemaFingerprints', JSON.stringify(previousFingerprints));
-                }
-                setShowMappingConfirmation(false);
-                setMappingProposal(null);
-                setError(null);
-              }}
-              onCancel={() => {
-                setShowMappingConfirmation(false);
-                setMappingProposal(null);
-              }}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Settings view
   if (showSettings) {
     return (
       <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
         <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
-          <div className="flex gap-4 items-center mb-8">
-            <div className="p-3 bg-gradient-to-br rounded-xl border shadow-lg from-white/10 to-white/5 border-white/10">
-              <Settings className="w-5 h-5 text-blue-400" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold">Configuration</h2>
-              <p className="mt-0.5 text-xs text-gray-500">Only API keys needed - databases auto-discovered</p>
-            </div>
-          </div>
-          <div className="overflow-y-auto flex-1 space-y-5">
-            {[
-              { key: 'notionKey', label: 'Notion API Key', type: 'password', required: true },
-              { key: 'geminiKey', label: 'Gemini API Key', type: 'password', required: true }
-            ].map(({ key, label, type, required }) => (
-              <div key={key}>
-                <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
-                  {label} {required && <span className="text-red-400">*</span>}
-                </label>
-                <input
-                  type={type}
-                  className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500/40 outline-none text-gray-200"
-                  value={config[key] || ''}
-                  onChange={e => updateConfig({ [key]: e.target.value })}
-                  placeholder={`Enter ${label.toLowerCase()}...`}
-                />
-                {key === 'notionKey' && (
-                  <p className="mt-1 text-xs text-gray-500">
-                    Databases will be automatically discovered from your Notion workspace
-                  </p>
-                )}
-              </div>
-            ))}
-            {discoveryData && (
-              <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                <div className="text-xs font-semibold text-blue-400 mb-2">Discovered Databases</div>
-                <div className="space-y-1 text-xs text-gray-300">
-                  {Object.entries(discoveryData.byDomain).map(([domain, dbs]) => (
-                    <div key={domain}>
-                      <span className="font-medium">{domain}:</span> {dbs.length} database{dbs.length !== 1 ? 's' : ''}
-                    </div>
-                  ))}
-                  {discoveryData.attemptsDatabases && (
-                    <div className="mt-2 pt-2 border-t border-blue-500/20">
-                      <span className="font-medium">Attempts DB:</span> {discoveryData.attemptsDatabases[0]?.title || 'Unknown'}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="flex gap-2 mt-6">
+          <div className="flex gap-4 items-center mb-6">
             <button
               onClick={() => setShowSettings(false)}
-              className="flex-1 py-3.5 font-semibold text-gray-300 rounded-xl bg-white/5 hover:bg-white/10"
+              className="p-2 rounded-lg hover:bg-white/5"
             >
-              Cancel
+              <X className="w-5 h-5 text-gray-400" />
+            </button>
+            <div>
+              <h2 className="text-lg font-semibold">Settings</h2>
+              <p className="mt-0.5 text-xs text-gray-500">Profile & data sync</p>
+            </div>
+          </div>
+
+          <div className="overflow-y-auto flex-1 space-y-6">
+            {profileError && (
+              <div className="p-3 rounded-lg border bg-red-500/10 border-red-500/20">
+                <p className="text-sm text-red-400">{profileError}</p>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
+                Gemini API Key
+              </label>
+              <input
+                type="password"
+                className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500/40 outline-none text-gray-200"
+                value={geminiDraft}
+                onChange={e => setGeminiDraft(e.target.value)}
+                placeholder="Enter Gemini API key..."
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Stored locally for this device.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-xl border bg-white/5 border-white/10">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <div className="text-xs font-semibold text-gray-400 uppercase">Imported data</div>
+                  <div className="text-sm text-gray-200">
+                    {databases.length} databases • {databases.reduce((sum, db) => sum + (db.item_count || 0), 0)} items
+                  </div>
+                </div>
+                <button
+                  onClick={refreshDatabases}
+                  disabled={isLoadingData}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300"
+                >
+                  <RefreshCcw className="w-3 h-3" />
+                  {isLoadingData ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+              {unknownDatabases.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs text-amber-400">
+                    {unknownDatabases.length} databases need a domain selection.
+                  </div>
+                  {unknownDatabases.map(db => (
+                    <div key={db.id} className="flex items-center gap-2">
+                      <div className="flex-1 text-xs text-gray-300">{db.title}</div>
+                      <select
+                        value={db.domain}
+                        onChange={(event) => {
+                          const nextDomain = event.target.value;
+                          updateSourceDatabaseDomain(user.id, db.id, nextDomain)
+                            .then(() => refreshDatabases())
+                            .catch(err => setError(err.message));
+                        }}
+                        className="bg-white/10 border border-white/10 text-xs text-gray-200 rounded-lg px-2 py-1"
+                      >
+                        <option value="Unknown">Unknown</option>
+                        {DOMAIN_OPTIONS.map(domain => (
+                          <option key={domain} value={domain}>{domain}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 rounded-xl border bg-blue-500/10 border-blue-500/20">
+              <div className="text-xs font-semibold text-blue-400 mb-2 uppercase">CSV Import</div>
+              <p className="text-sm text-gray-300">
+                Drop CSV exports into <code className="text-blue-300">data/</code> and import them here:
+              </p>
+              <button
+                onClick={handleImportCsvs}
+                disabled={isImporting}
+                className="mt-3 w-full py-2 text-xs font-semibold text-blue-100 rounded-lg border border-blue-500/40 bg-blue-500/20 hover:bg-blue-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isImporting ? 'Importing CSVs...' : 'Import CSVs from data/'}
+              </button>
+              {importMessage && (
+                <div className="mt-2 text-xs text-green-200">{importMessage}</div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-2 mt-6">
+            <button
+              onClick={() => signOut()}
+              className="flex-1 py-3.5 font-semibold text-gray-300 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign out
             </button>
             <button
               onClick={async () => {
-                await updateConfig(config);
+                await saveProfile({ gemini_key: geminiDraft });
                 setShowSettings(false);
               }}
               className="flex-1 py-3.5 font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl shadow-xl hover:from-blue-500 hover:to-indigo-500"
@@ -395,49 +390,9 @@ function InterviewPrepApp() {
     );
   }
 
-  // Upgrade flow view
-  if (showUpgrade) {
-    return (
-      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
-          <div className="flex gap-4 items-center mb-6">
-            <button
-              onClick={() => setShowUpgrade(false)}
-              className="p-2 rounded-lg hover:bg-white/5"
-            >
-              <Settings className="w-5 h-5 text-gray-400" />
-            </button>
-            <div>
-              <h2 className="text-lg font-semibold">Schema Upgrade</h2>
-              <p className="mt-0.5 text-xs text-gray-500">Review and apply schema changes</p>
-            </div>
-          </div>
-          <div className="overflow-y-auto flex-1">
-            {databaseMapping && Object.entries(databaseMapping).flatMap(([domain, dbIds]) => {
-              const ids = Array.isArray(dbIds) ? dbIds : [dbIds];
-              return ids.map((dbId) => (
-                <div key={`${domain}-${dbId}`} className="mb-4">
-                  <div className="text-xs font-semibold text-gray-400 mb-2">{domain}</div>
-                  <UpgradeFlow
-                    apiKey={config.notionKey}
-                    databaseId={dbId}
-                    onComplete={() => setShowUpgrade(false)}
-                    onCancel={() => setShowUpgrade(false)}
-                  />
-                </div>
-              ));
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Main view
   return (
     <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
       <div className="flex relative z-10 flex-col px-5 py-6 flex-1">
-        {/* Header */}
         <header className="flex justify-between items-center mb-6">
           <div className="flex gap-3 items-center">
             <div className="flex justify-center items-center w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg shadow-blue-500/20">
@@ -461,7 +416,6 @@ function InterviewPrepApp() {
           </button>
         </header>
 
-        {/* Content */}
         <main className="flex overflow-y-auto flex-col flex-1 gap-4">
           {error && (
             <div className="p-3 rounded-lg border bg-red-500/10 border-red-500/20">
@@ -469,18 +423,16 @@ function InterviewPrepApp() {
             </div>
           )}
 
-          {databaseMapping && Object.keys(databaseMapping).length === 0 && (
+          {!hasData && (
             <div className="p-4 rounded-lg border bg-yellow-500/10 border-yellow-500/20">
               <p className="text-sm text-yellow-400">
-                No learning databases found. Please ensure your Notion API key has access to databases.
+                No imported databases found. Add CSV exports to <code>data/</code> and run the import script.
               </p>
             </div>
           )}
 
-          {/* Active Session View */}
           {isActive && session && currentUnit ? (
             <div className="space-y-4">
-              {/* Session Progress */}
               <div className="p-4 rounded-xl border bg-white/5 border-white/10">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-xs font-semibold text-gray-400 uppercase">Session Progress</span>
@@ -504,15 +456,13 @@ function InterviewPrepApp() {
                 </div>
               </div>
 
-              {/* Current Unit */}
               <WorkUnit
                 unit={currentUnit}
                 onComplete={handleUnitComplete}
                 geminiService={geminiService}
-                config={config}
+                config={{ geminiKey: effectiveGeminiKey }}
               />
 
-              {/* Session Controls */}
               <button
                 onClick={endSession}
                 className="py-2.5 w-full text-sm font-medium text-gray-300 rounded-lg border bg-white/5 hover:bg-white/10 border-white/10"
@@ -526,10 +476,9 @@ function InterviewPrepApp() {
               <p className="text-sm text-gray-400">Composing your session...</p>
             </div>
           ) : (
-            /* Default: Start Session (UX Contract) */
             <SessionStarter
               onStart={handleStartSession}
-              config={{ isConfigured: isConfigured && databaseMapping && Object.keys(databaseMapping).length > 0 }}
+              config={{ isConfigured: isConfigured && hasData }}
             />
           )}
         </main>
