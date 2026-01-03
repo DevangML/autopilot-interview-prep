@@ -4,8 +4,9 @@
  */
 
 import { useState, useEffect } from 'react';
-import { ExternalLink, Youtube, Code, BookOpen, Loader2, X } from 'lucide-react';
+import { ExternalLink, Youtube, Code, BookOpen, X } from 'lucide-react';
 import { findProblemResources, getYouTubeEmbedUrl } from '../services/problemResources.js';
+import { Skeleton, SkeletonButton } from './Skeleton.jsx';
 
 export const ProblemResources = ({ problemName, onClose }) => {
   const [resources, setResources] = useState(null);
@@ -50,9 +51,10 @@ export const ProblemResources = ({ problemName, onClose }) => {
       </div>
 
       {isLoading ? (
-        <div className="flex gap-2 items-center text-xs text-gray-400">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          <span>Finding resources...</span>
+        <div className="space-y-3">
+          <SkeletonButton />
+          <SkeletonButton />
+          <SkeletonButton />
         </div>
       ) : resources ? (
         <div className="space-y-3">

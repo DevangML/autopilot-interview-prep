@@ -5,6 +5,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { X, Sparkles, Loader2, Send, Plus, CheckCircle, AlertCircle, Globe } from 'lucide-react';
+import { SkeletonText } from './Skeleton.jsx';
 import { createItem, fetchItemsBySourceDatabase } from '../services/dataStore.js';
 
 /**
@@ -564,10 +565,7 @@ Engage with the user's question or argument. Use web search if discussing curren
                       className="flex gap-2 items-center px-3 py-1.5 text-xs font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 disabled:opacity-50"
                     >
                       {isAddingItems ? (
-                        <>
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Adding...
-                        </>
+                        <Skeleton height="0.75rem" className="w-24" />
                       ) : (
                         <>
                           <CheckCircle className="w-3 h-3" />

@@ -6,6 +6,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { X, List, Grid, Layers, Search, Filter, RotateCcw, RefreshCw } from 'lucide-react';
 import { fetchItemsBySourceDatabase, uncompleteItem } from '../services/dataStore.js';
+import { Skeleton, SkeletonCard, SkeletonText } from './Skeleton.jsx';
 
 const VIEW_MODES = {
   QUESTIONS: 'questions',
@@ -261,8 +262,10 @@ export const DetailsView = ({ databases, onClose }) => {
             }
           `}</style>
           {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="w-8 h-8 rounded-full border-2 border-blue-500 animate-spin border-t-transparent" />
+            <div className="space-y-4">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <SkeletonCard key={i} />
+              ))}
             </div>
           ) : viewMode === VIEW_MODES.QUESTIONS ? (
             <div className="space-y-4">

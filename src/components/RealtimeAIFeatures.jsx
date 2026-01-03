@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Lightbulb, TrendingUp, Target } from 'lucide-react';
+import { Skeleton, SkeletonText } from './Skeleton.jsx';
 
 /**
  * Real-time hint generator - provides hints as user types
@@ -64,7 +65,7 @@ Provide a brief, helpful hint (1-2 sentences) to guide them without giving away 
         <Lightbulb className="w-3 h-3 text-purple-400 mt-0.5 shrink-0" />
         <div className="flex-1">
           {isGenerating ? (
-            <span className="text-xs text-purple-300 italic">Thinking of a hint...</span>
+            <SkeletonText lines={1} className="w-3/4" />
           ) : (
             <span className="text-xs text-purple-200">{hint}</span>
           )}
@@ -121,9 +122,11 @@ Respond with just: "Easy", "Medium", or "Hard" based on the complexity of their 
   return (
     <div className="mt-2 flex gap-2 items-center text-xs">
       <Target className="w-3 h-3 text-blue-400" />
-      <span className="text-gray-400">
-        {isAssessing ? 'Assessing difficulty...' : `Approach difficulty: ${assessment}`}
-      </span>
+      {isAssessing ? (
+        <Skeleton height="0.75rem" className="w-32" />
+      ) : (
+        <span className="text-gray-400">Approach difficulty: {assessment}</span>
+      )}
     </div>
   );
 };

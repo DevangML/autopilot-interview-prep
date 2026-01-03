@@ -139,6 +139,7 @@ export const generateWithMCP = async (ollamaUrl, ollamaModel, prompt, options = 
     : prompt;
   
   // Call Ollama with enhanced prompt
+  // Note: This will automatically wake up Ollama if needed (handled in ollama.js)
   const { generateContent } = await import('./ollama.js');
   return await generateContent(ollamaUrl, ollamaModel, enhancedPrompt, options);
 };

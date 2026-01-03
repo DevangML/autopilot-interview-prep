@@ -30,16 +30,21 @@ export const findProblemResources = async (problemName) => {
     const gfgQuery = encodeURIComponent(problemName);
     resources.gfg = `https://www.geeksforgeeks.org/?s=${gfgQuery}`;
 
-    // Use web search to find specific resources
-    const { executeWebSearch } = await import('./mcpClient.js');
-    const searchResult = await executeWebSearch(`${problemName} solution tutorial`);
-    
-    if (searchResult.success && searchResult.raw) {
-      // Extract YouTube video IDs from search results
-      const youtubeMatch = searchResult.formatted.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/);
-      if (youtubeMatch) {
-        resources.youtube.embedUrl = `https://www.youtube.com/embed/${youtubeMatch[1]}`;
+    // Use web search to find specific resources (doesn't require Ollama - uses DuckDuckGo API directly)
+    try {
+      const { executeWebSearch } = await import('./mcpClient.js');
+      const searchResult = await executeWebSearch(`${problemName} solution tutorial`);
+      
+      if (searchResult.success && searchResult.raw) {
+        // Extract YouTube video IDs from search results
+        const youtubeMatch = searchResult.formatted.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/);
+        if (youtubeMatch) {
+          resources.youtube.embedUrl = `https://www.youtube.com/embed/${youtubeMatch[1]}`;
+        }
       }
+    } catch (searchError) {
+      // Web search is optional - continue without it
+      console.log('[problemResources] Web search optional, continuing without embedded video:', searchError.message);
     }
 
     return resources;
