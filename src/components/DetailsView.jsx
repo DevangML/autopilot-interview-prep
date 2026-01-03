@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo, useEffect } from 'react';
-import { X, List, Grid, Layers, Search, Filter, RotateCcw } from 'lucide-react';
+import { X, List, Grid, Layers, Search, Filter, RotateCcw, RefreshCw } from 'lucide-react';
 import { fetchItemsBySourceDatabase, uncompleteItem } from '../services/dataStore.js';
 
 const VIEW_MODES = {
@@ -30,46 +30,53 @@ export const DetailsView = ({ databases, onClose }) => {
   }, []);
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCompleted, setFilterCompleted] = useState('all'); // 'all', 'completed', 'pending'
   const [uncompletingItemId, setUncompletingItemId] = useState(null);
 
-  // Load items when domain changes or on mount
-  useEffect(() => {
-    const loadItems = async () => {
-      setIsLoading(true);
-      try {
-        const allItems = [];
-        
-        if (selectedDomain && databases[selectedDomain]) {
-          // Load items for selected domain
-          const dbIds = databases[selectedDomain];
+  const loadItems = async () => {
+    setIsLoading(true);
+    try {
+      const allItems = [];
+      
+      if (selectedDomain && databases[selectedDomain]) {
+        // Load items for selected domain
+        const dbIds = databases[selectedDomain];
+        for (const dbId of dbIds) {
+          const dbItems = await fetchItemsBySourceDatabase(dbId);
+          allItems.push(...dbItems.map(item => ({ ...item, domain: selectedDomain })));
+        }
+      } else if (!selectedDomain) {
+        // Load items from all domains
+        const allDomains = Object.keys(databases || {});
+        for (const domain of allDomains) {
+          const dbIds = databases[domain];
           for (const dbId of dbIds) {
             const dbItems = await fetchItemsBySourceDatabase(dbId);
-            allItems.push(...dbItems.map(item => ({ ...item, domain: selectedDomain })));
-          }
-        } else if (!selectedDomain) {
-          // Load items from all domains
-          const allDomains = Object.keys(databases || {});
-          for (const domain of allDomains) {
-            const dbIds = databases[domain];
-            for (const dbId of dbIds) {
-              const dbItems = await fetchItemsBySourceDatabase(dbId);
-              allItems.push(...dbItems.map(item => ({ ...item, domain })));
-            }
+            allItems.push(...dbItems.map(item => ({ ...item, domain })));
           }
         }
-        
-        setItems(allItems);
-      } catch (error) {
-        console.error('Failed to load items:', error);
-      } finally {
-        setIsLoading(false);
       }
-    };
-    
+      
+      setItems(allItems);
+    } catch (error) {
+      console.error('Failed to load items:', error);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  // Load items when domain changes or on mount
+  useEffect(() => {
     loadItems();
   }, [selectedDomain, databases]);
+
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    loadItems();
+  };
 
   // Filter and search items
   const filteredItems = useMemo(() => {
@@ -154,12 +161,22 @@ export const DetailsView = ({ databases, onClose }) => {
             <h1 className="text-xl font-bold tracking-tight">Details View</h1>
             <p className="text-xs text-gray-400 mt-1">Browse questions, sections, and patterns</p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-white/5"
-          >
-            <X className="w-5 h-5 text-gray-400" />
-          </button>
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-2 rounded-lg hover:bg-white/5 disabled:opacity-50 transition-colors"
+              title="Refresh to see newly added items"
+            >
+              <RefreshCw className={`w-5 h-5 text-gray-400 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-white/5"
+            >
+              <X className="w-5 h-5 text-gray-400" />
+            </button>
+          </div>
         </div>
 
         {/* View Mode Selector */}

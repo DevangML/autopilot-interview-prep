@@ -145,6 +145,18 @@ app.post('/auth/google', async (req, res) => {
   }
 
   try {
+    // Try to decode token first to check audience
+    let tokenAudience = null;
+    try {
+      const parts = idToken.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+        tokenAudience = payload.aud;
+      }
+    } catch (decodeErr) {
+      // Ignore decode errors
+    }
+
     const ticket = await oauthClient.verifyIdToken({
       idToken,
       audience: GOOGLE_CLIENT_ID
@@ -173,7 +185,34 @@ app.post('/auth/google', async (req, res) => {
     const token = signToken(user);
     res.json({ token, user });
   } catch (err) {
-    res.status(401).json({ error: 'Google token verification failed.' });
+    console.error('[Auth] Google token verification error:', err.message);
+    console.error('[Auth] Expected client ID:', GOOGLE_CLIENT_ID);
+    
+    // Try to decode the token to see what audience it has
+    try {
+      const parts = idToken.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+        console.error('[Auth] Token audience:', payload.aud);
+        console.error('[Auth] Token issuer:', payload.iss);
+        console.error('[Auth] Token email:', payload.email);
+        
+        if (payload.aud !== GOOGLE_CLIENT_ID) {
+          res.status(401).json({ 
+            error: 'Google token verification failed: Client ID mismatch.',
+            details: `Expected: ${GOOGLE_CLIENT_ID}, Got: ${payload.aud}`
+          });
+          return;
+        }
+      }
+    } catch (decodeErr) {
+      // Ignore decode errors
+    }
+    
+    res.status(401).json({ 
+      error: 'Google token verification failed.',
+      details: err.message || 'Unknown error'
+    });
   }
 });
 
@@ -287,6 +326,139 @@ app.get('/items', authMiddleware, requireAllowed, (req, res) => {
     order by name asc
   `).all(req.user.id, sourceDatabaseId);
   res.json(rows);
+});
+
+app.post('/items', authMiddleware, requireAllowed, (req, res) => {
+  console.log('[POST /items] Request received:', {
+    userId: req.user?.id,
+    body: req.body,
+    hasSourceDatabaseId: !!req.body?.sourceDatabaseId,
+    hasName: !!req.body?.name,
+    hasDomain: !!req.body?.domain
+  });
+
+  const { sourceDatabaseId, name, domain, difficulty, pattern, raw } = req.body || {};
+  
+  if (!sourceDatabaseId || !name || !domain) {
+    const error = 'Missing required fields: sourceDatabaseId, name, domain.';
+    console.error('[POST /items] Validation failed:', {
+      sourceDatabaseId: !!sourceDatabaseId,
+      name: !!name,
+      domain: !!domain,
+      body: req.body
+    });
+    res.status(400).json({ error });
+    return;
+  }
+
+  // Verify source database belongs to user
+  const sourceDb = db.prepare(`
+    select id, domain, title from source_databases
+    where id = ? and user_id = ?
+  `).get(sourceDatabaseId, req.user.id);
+
+  console.log('[POST /items] Source database lookup:', {
+    sourceDatabaseId,
+    userId: req.user.id,
+    found: !!sourceDb,
+    sourceDb
+  });
+
+  if (!sourceDb) {
+    // Check if database exists but belongs to different user
+    const anyDb = db.prepare('select id, user_id from source_databases where id = ?').get(sourceDatabaseId);
+    if (anyDb) {
+      console.error('[POST /items] Database exists but wrong user:', {
+        requestedUserId: req.user.id,
+        actualUserId: anyDb.user_id
+      });
+      res.status(403).json({ error: 'Source database access denied. Database belongs to different user.' });
+    } else {
+      console.error('[POST /items] Database not found:', sourceDatabaseId);
+      res.status(404).json({ error: `Source database not found: ${sourceDatabaseId}` });
+    }
+    return;
+  }
+
+  // Create row hash for uniqueness
+  const rowHash = crypto.createHash('sha256')
+    .update(`${name}|${domain}|${JSON.stringify(raw || {})}`)
+    .digest('hex');
+
+  const id = crypto.randomUUID();
+  const rawJson = typeof raw === 'string' ? raw : JSON.stringify(raw || {});
+
+  try {
+    console.log('[POST /items] Inserting item:', {
+      id,
+      userId: req.user.id,
+      sourceDatabaseId,
+      name,
+      domain,
+      difficulty,
+      pattern,
+      rowHash: rowHash.substring(0, 16) + '...'
+    });
+
+    db.prepare(`
+      insert into learning_items (
+        id, user_id, source_database_id, name, domain, difficulty, pattern, completed, raw, row_hash
+      )
+      values (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(
+      id,
+      req.user.id,
+      sourceDatabaseId,
+      name,
+      domain,
+      difficulty || null,
+      pattern || null,
+      rawJson,
+      rowHash
+    );
+
+    console.log('[POST /items] Item inserted, updating count');
+
+    // Update item count in source database
+    db.prepare(`
+      update source_databases
+      set item_count = item_count + 1, updated_at = datetime('now')
+      where id = ?
+    `).run(sourceDatabaseId);
+
+    const created = db.prepare(`
+      select li.id, li.name, sd.domain as domain, li.difficulty, li.pattern, li.completed, li.source_database_id, li.raw
+      from learning_items li
+      join source_databases sd on sd.id = li.source_database_id
+      where li.id = ?
+    `).get(id);
+
+    console.log('[POST /items] Item created successfully:', {
+      id: created?.id,
+      name: created?.name
+    });
+
+    res.status(201).json(created);
+  } catch (err) {
+    console.error('[POST /items] Database error:', {
+      error: err.message,
+      code: err.code,
+      stack: err.stack,
+      itemData: { name, domain, sourceDatabaseId }
+    });
+    
+    if (err.message.includes('UNIQUE constraint')) {
+      res.status(409).json({ 
+        error: 'Item already exists (duplicate row hash).',
+        details: err.message 
+      });
+    } else {
+      res.status(500).json({ 
+        error: err.message || 'Failed to create item.',
+        details: err.code || 'Unknown database error'
+      });
+    }
+  }
 });
 
 app.get('/attempts', authMiddleware, requireAllowed, (req, res) => {
@@ -477,4 +649,9 @@ app.patch('/items/:id/uncomplete', authMiddleware, requireAllowed, (req, res) =>
 
 app.listen(PORT, () => {
   console.log(`Local API running at http://localhost:${PORT}`);
+  console.log(`[Server] Available routes:`);
+  console.log(`  POST /items - Create new learning item`);
+  console.log(`  GET /items - Get items by source database`);
+  console.log(`  POST /items/reset-domain - Reset domain progress`);
+  console.log(`  PATCH /items/:id/uncomplete - Uncomplete an item`);
 });

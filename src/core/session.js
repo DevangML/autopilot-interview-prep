@@ -7,7 +7,8 @@ export const FOCUS_MODES = {
   BALANCED: 'balanced',
   DSA_HEAVY: 'dsa-heavy',
   INTERVIEW_HEAVY: 'interview-heavy',
-  CUSTOM: 'custom'
+  CUSTOM: 'custom',
+  MOOD: 'mood'
 };
 
 export const SESSION_DURATIONS = {
@@ -52,6 +53,62 @@ const TIME_ALLOCATIONS = {
  * @param {Object} params.breadthUnit - Breadth unit data
  * @returns {Object} Session composition
  */
+/**
+ * Composes a mood mode session (untimed, N questions)
+ * @param {Object} params
+ * @param {number} params.questionCount - Number of questions (5 or 10)
+ * @param {Array<Object>} params.units - Array of unit objects
+ * @returns {Object} Session composition
+ */
+export const composeMoodSession = ({
+  questionCount = 5,
+  units = []
+}) => {
+  console.log('[composeMoodSession] Input', {
+    questionCount,
+    unitsCount: units.length,
+    unitsWithItems: units.filter(u => u.item).length,
+    firstUnit: units[0] ? {
+      hasItem: !!units[0].item,
+      itemId: units[0].item?.id || 'none',
+      itemName: units[0].item?.name || units[0].item?.title || 'none'
+    } : null
+  });
+  
+  const composedUnits = units.map((unit, index) => {
+    const composed = {
+      ...unit,
+      type: unit.type || 'core',
+      timeMinutes: null, // Untimed
+      index
+    };
+    
+    if (!composed.item) {
+      console.warn('[composeMoodSession] Unit missing item at index', index, unit);
+    }
+    
+    return composed;
+  });
+  
+  console.log('[composeMoodSession] Output', {
+    unitsCount: composedUnits.length,
+    unitsWithItems: composedUnits.filter(u => u.item).length,
+    firstUnit: composedUnits[0] ? {
+      hasItem: !!composedUnits[0].item,
+      itemId: composedUnits[0].item?.id || 'none',
+      itemName: composedUnits[0].item?.name || composedUnits[0].item?.title || 'none'
+    } : null
+  });
+  
+  return {
+    totalMinutes: null, // Untimed
+    focusMode: FOCUS_MODES.MOOD,
+    isUntimed: true,
+    questionCount,
+    units: composedUnits
+  };
+};
+
 export const composeSession = ({
   totalMinutes = SESSION_DURATIONS.DEFAULT,
   focusMode = FOCUS_MODES.BALANCED,
@@ -59,6 +116,11 @@ export const composeSession = ({
   coreUnit,
   breadthUnit
 }) => {
+  // Mood mode uses different composition
+  if (focusMode === FOCUS_MODES.MOOD) {
+    throw new Error('Use composeMoodSession for mood mode');
+  }
+  
   const allowedMinutes = [SESSION_DURATIONS.SHORT, SESSION_DURATIONS.DEFAULT, SESSION_DURATIONS.LONG];
   const safeMinutes = allowedMinutes.includes(totalMinutes)
     ? totalMinutes

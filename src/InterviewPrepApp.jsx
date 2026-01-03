@@ -3,7 +3,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BrainCircuit, BarChart3, List, LogOut, RefreshCcw, Settings, ShieldAlert, X, CheckCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { BrainCircuit, BarChart3, List, LogOut, RefreshCcw, Settings, ShieldAlert, X, CheckCircle, Clock, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { useSession } from './hooks/useSession.js';
 import { useAuth } from './hooks/useAuth.js';
 import { useProfile } from './hooks/useProfile.js';
@@ -14,7 +14,9 @@ import { SessionStarter } from './components/SessionStarter.jsx';
 import { WorkUnit } from './components/WorkUnit.jsx';
 import { ProgressView } from './components/ProgressView.jsx';
 import { DetailsView } from './components/DetailsView.jsx';
-import { orchestrateSession } from './core/sessionOrchestrator.js';
+import { DeepImproveChat } from './components/DeepImproveChat.jsx';
+import { orchestrateSession, orchestrateMoodSession } from './core/sessionOrchestrator.js';
+import { composeMoodSession, FOCUS_MODES } from './core/session.js';
 import { createAIService, AI_PROVIDERS } from './services/aiService.js';
 import { checkOllamaConnection, listModels } from './services/ollama.js';
 import {
@@ -62,6 +64,7 @@ function InterviewPrepApp() {
   const [showSettings, setShowSettings] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [showDeepImprove, setShowDeepImprove] = useState(false);
   const [isOrchestrating, setIsOrchestrating] = useState(false);
   const [error, setError] = useState(null);
   const [databases, setDatabases] = useState([]);
@@ -117,7 +120,6 @@ function InterviewPrepApp() {
       const models = await listModels(ollamaUrl);
       setOllamaModels(models);
     } catch (error) {
-      console.error('Failed to load Ollama models:', error);
       setOllamaModels([]);
     } finally {
       setIsCheckingOllama(false);
@@ -222,7 +224,7 @@ function InterviewPrepApp() {
     }
   }, [user, endSession]);
 
-  const handleStartSession = async ({ totalMinutes, focusMode, customIntent }) => {
+  const handleStartSession = async ({ totalMinutes, focusMode, customIntent, questionCount, moodPrompt }) => {
     console.log('[InterviewPrepApp] handleStartSession called', { 
       totalMinutes, 
       focusMode, 
@@ -267,6 +269,51 @@ function InterviewPrepApp() {
     setError(null);
 
     try {
+      // Handle Mood Mode separately
+      if (focusMode === FOCUS_MODES.MOOD) {
+        console.log('[InterviewPrepApp] Starting mood mode orchestration...', { 
+          questionCount,
+          moodPrompt,
+          domainCount: Object.keys(databaseMapping).length 
+        });
+        
+        const attemptsContext = getAttemptsData([], externalAttemptsData);
+        const moodUnits = await orchestrateMoodSession({
+          databases: databaseMapping,
+          questionCount: questionCount || 5,
+          customPrompt: moodPrompt,
+          getAttemptsData: () => attemptsContext,
+          fetchItems: (dbId) => fetchItemsBySourceDatabase(dbId),
+          aiService
+        });
+
+        console.log('[InterviewPrepApp] Mood mode orchestration complete', { 
+          questionCount: moodUnits.length,
+          units: moodUnits.map(u => ({
+            hasItem: !!u.item,
+            itemId: u.item?.id || 'none',
+            itemName: u.item?.name || u.item?.title || 'none',
+            itemDomain: u.item?.domain || 'none',
+            unitType: u.unitType || 'none'
+          }))
+        });
+
+        const moodSession = composeMoodSession({
+          questionCount: questionCount || 5,
+          units: moodUnits
+        });
+
+        startSession({
+          totalMinutes: null, // Untimed
+          focusMode: FOCUS_MODES.MOOD,
+          units: moodSession.units,
+          isUntimed: true,
+          questionCount: questionCount || 5
+        });
+        return;
+      }
+
+      // Regular session orchestration
       console.log('[InterviewPrepApp] Starting orchestration...', { 
         focusMode, 
         totalMinutes,
@@ -409,6 +456,23 @@ function InterviewPrepApp() {
     );
   }
 
+  if (showDeepImprove) {
+    console.log('[InterviewPrepApp] Rendering DeepImproveChat with databases:', {
+      databaseMapping,
+      keys: Object.keys(databaseMapping),
+      sampleDomain: Object.keys(databaseMapping)[0],
+      sampleValue: databaseMapping[Object.keys(databaseMapping)[0]]
+    });
+    return (
+      <DeepImproveChat
+        databases={databaseMapping}
+        onClose={() => setShowDeepImprove(false)}
+        aiService={aiService}
+        userId={user?.id}
+      />
+    );
+  }
+
   if (showDetails) {
     return (
       <DetailsView
@@ -443,9 +507,19 @@ function InterviewPrepApp() {
 
   if (showSettings) {
     return (
-      <div className="w-full min-h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
-        <div className="flex relative z-10 flex-col px-5 py-6 flex-1 overflow-hidden">
-          <div className="flex gap-4 items-center mb-6">
+      <div className="w-full h-screen bg-[#0B0F19] text-white flex flex-col relative overflow-hidden">
+        <style>{`
+          .hide-scrollbar {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+          }
+          .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+          }
+        `}</style>
+        {/* Header - Fixed */}
+        <div className="flex-shrink-0 px-5 pt-6 pb-4 border-b border-white/10">
+          <div className="flex gap-4 items-center">
             <button
               onClick={() => setShowSettings(false)}
               className="p-2 rounded-lg hover:bg-white/5"
@@ -457,8 +531,10 @@ function InterviewPrepApp() {
               <p className="mt-0.5 text-xs text-gray-500">Profile & data sync</p>
             </div>
           </div>
+        </div>
 
-          <div className="flex-1 overflow-y-auto space-y-6">
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto px-5 py-6 min-h-0 hide-scrollbar space-y-6">
             {profileError && (
               <div className="p-3 rounded-lg border bg-red-500/10 border-red-500/20">
                 <p className="text-sm text-red-400">{profileError}</p>
@@ -473,8 +549,9 @@ function InterviewPrepApp() {
                 <select
                   value={aiProvider}
                   onChange={(e) => {
-                    setAiProvider(e.target.value);
-                    if (e.target.value === 'ollama') {
+                    const newProvider = e.target.value;
+                    setAiProvider(newProvider);
+                    if (newProvider === 'ollama') {
                       loadOllamaModels();
                     }
                   }}
@@ -788,9 +865,11 @@ function InterviewPrepApp() {
                 Reset Domain Progress
               </button>
             </div>
-          </div>
+        </div>
 
-          <div className="flex gap-2 mt-6">
+        {/* Footer with Save Button - Fixed */}
+        <div className="flex-shrink-0 px-5 py-4 border-t border-white/10 bg-[#0B0F19]">
+          <div className="flex gap-2">
             <button
               onClick={() => signOut()}
               className="flex-1 py-3.5 font-semibold text-gray-300 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center gap-2"
@@ -886,8 +965,16 @@ function InterviewPrepApp() {
               <BarChart3 className="w-5 h-5 text-gray-500 hover:text-blue-400" />
             </button>
             <button
+              onClick={() => setShowDeepImprove(true)}
+              className="p-2.5 rounded-lg hover:bg-white/5"
+              title="Deep Improve - Analyze domain data quality"
+            >
+              <Sparkles className="w-5 h-5 text-gray-500 hover:text-purple-400" />
+            </button>
+            <button
               onClick={() => setShowSettings(true)}
               className="p-2.5 rounded-lg hover:bg-white/5"
+              title="Settings"
             >
               <Settings className="w-5 h-5 text-gray-500 hover:text-blue-400" />
             </button>
@@ -956,7 +1043,7 @@ function InterviewPrepApp() {
                           }
                         }}
                         disabled={!canGoPrev}
-                        className={`p-2 rounded-lg transition-colors ${
+                        className={`p-2 rounded-lg transition-colors relative z-10 ${
                           canGoPrev
                             ? 'bg-white/5 hover:bg-white/10 text-white cursor-pointer'
                             : 'bg-white/5 opacity-30 cursor-not-allowed text-gray-500'
@@ -986,6 +1073,9 @@ function InterviewPrepApp() {
                         {viewUnitIndex === session.currentUnitIndex && (
                           <span className="text-xs text-blue-400 font-medium">Active</span>
                         )}
+                        {viewUnitIndex > session.currentUnitIndex && (
+                          <span className="text-xs text-gray-500 font-medium">Preview</span>
+                        )}
                       </div>
                       <button
                         onClick={(e) => {
@@ -996,7 +1086,7 @@ function InterviewPrepApp() {
                           }
                         }}
                         disabled={!canGoNext}
-                        className={`p-2 rounded-lg transition-colors ${
+                        className={`p-2 rounded-lg transition-colors relative z-10 ${
                           canGoNext
                             ? 'bg-white/5 hover:bg-white/10 text-white cursor-pointer'
                             : 'bg-white/5 opacity-30 cursor-not-allowed text-gray-500'
@@ -1006,10 +1096,17 @@ function InterviewPrepApp() {
                         <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
-                      <Clock className="w-3 h-3" />
-                      <span>{viewUnit.timeMinutes} min</span>
-                    </div>
+                    {viewUnit.timeMinutes !== null && viewUnit.timeMinutes !== undefined && (
+                      <div className="flex items-center gap-2 text-xs text-gray-400">
+                        <Clock className="w-3 h-3" />
+                        <span>{viewUnit.timeMinutes} min</span>
+                      </div>
+                    )}
+                    {session.isUntimed && (
+                      <div className="flex items-center gap-2 text-xs text-purple-400">
+                        <span>⏱️ Untimed Mode</span>
+                      </div>
+                    )}
                   </div>
                   
                   {viewUnit.item && (
@@ -1033,7 +1130,7 @@ function InterviewPrepApp() {
                       
                       {viewUnitIndex > session.currentUnitIndex && (
                         <div className="p-3 bg-white/5 rounded-lg text-xs text-gray-500 italic text-center">
-                          Complete previous units to unlock
+                          Preview mode - Complete previous units to edit this one
                         </div>
                       )}
                     </div>
@@ -1045,6 +1142,7 @@ function InterviewPrepApp() {
                 unit={currentUnit}
                 onComplete={handleUnitComplete}
                 geminiService={aiService}
+                aiService={aiService}
                 config={{ geminiKey: effectiveGeminiKey }}
               />
 

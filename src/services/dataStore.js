@@ -22,25 +22,67 @@ export const setAuthToken = (token) => {
 
 const apiFetch = async (path, options = {}) => {
   const token = getAuthToken();
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+  const url = `${API_URL}${path}`;
+  
+  console.log('[dataStore] apiFetch:', { path, method: options.method || 'GET', hasBody: !!options.body });
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    });
+
+    console.log('[dataStore] apiFetch response:', { 
+      path, 
+      status: response.status, 
+      ok: response.ok,
+      statusText: response.statusText
+    });
+
+    if (!response.ok) {
+      let errorText;
+      try {
+        const errorJson = await response.json();
+        errorText = errorJson.error || errorJson.message || JSON.stringify(errorJson);
+        console.error('[dataStore] apiFetch error response:', {
+          path,
+          status: response.status,
+          error: errorText,
+          fullError: errorJson
+        });
+      } catch (parseErr) {
+        errorText = await response.text();
+        console.error('[dataStore] apiFetch error (text):', {
+          path,
+          status: response.status,
+          error: errorText
+        });
+      }
+      const error = new Error(errorText || `Request failed (${response.status})`);
+      error.status = response.status;
+      throw error;
     }
-  });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || `Request failed (${response.status})`);
+    if (response.status === 204) {
+      return null;
+    }
+
+    const result = await response.json();
+    console.log('[dataStore] apiFetch success:', { path, resultKeys: Object.keys(result || {}) });
+    return result;
+  } catch (error) {
+    console.error('[dataStore] apiFetch exception:', {
+      path,
+      error: error.message,
+      status: error.status,
+      stack: error.stack
+    });
+    throw error;
   }
-
-  if (response.status === 204) {
-    return null;
-  }
-
-  return response.json();
 };
 
 export const exchangeGoogleToken = async (idToken) => {
@@ -133,4 +175,23 @@ export const uncompleteItem = async (itemId) => {
   return apiFetch(`/items/${itemId}/uncomplete`, {
     method: 'PATCH'
   });
+};
+
+export const createItem = async (itemData) => {
+  console.log('[dataStore] createItem called with:', itemData);
+  try {
+    const result = await apiFetch('/items', {
+      method: 'POST',
+      body: JSON.stringify(itemData)
+    });
+    console.log('[dataStore] createItem success:', result);
+    return result;
+  } catch (error) {
+    console.error('[dataStore] createItem error:', {
+      error,
+      message: error.message,
+      itemData
+    });
+    throw error;
+  }
 };

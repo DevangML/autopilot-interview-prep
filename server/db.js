@@ -136,6 +136,21 @@ ensureColumn('source_databases', 'schema_snapshot', 'text');
 ensureColumn('source_databases', 'confirmed_schema_hash', 'text');
 ensureColumn('source_databases', 'confirmed_schema_snapshot', 'text');
 
+// Migrate users table for AI provider settings
+ensureColumn('users', 'ai_provider', 'text');
+ensureColumn('users', 'ollama_url', 'text');
+ensureColumn('users', 'ollama_model', 'text');
+
+// Set default ai_provider for existing users (after ensuring column exists)
+try {
+  const hasAiProvider = db.prepare(`pragma table_info(users)`).all().some(col => col.name === 'ai_provider');
+  if (hasAiProvider) {
+    db.prepare(`update users set ai_provider = 'gemini' where ai_provider is null`).run();
+  }
+} catch {
+  // Ignore migration errors
+}
+
 try {
   const countRow = db.prepare('select count(*) as count from learning_items').get();
   if (countRow?.count === 0) {

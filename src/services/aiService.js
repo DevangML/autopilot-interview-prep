@@ -1,10 +1,12 @@
 /**
  * Unified AI Service
  * Supports both Gemini and Ollama with a consistent interface
+ * Includes MCP (Model Context Protocol) support for Ollama
  */
 
 import { generateContent as geminiGenerate } from './gemini.js';
 import { generateContent as ollamaGenerate } from './ollama.js';
+import { generateWithMCP, detectSearchNeeds } from './mcpClient.js';
 
 export const AI_PROVIDERS = {
   GEMINI: 'gemini',
@@ -26,7 +28,22 @@ export const createAIService = (config) => {
   if (provider === AI_PROVIDERS.OLLAMA) {
     return {
       provider: AI_PROVIDERS.OLLAMA,
+      ollamaUrl,
+      ollamaModel,
       generateContent: async (prompt, options = {}) => {
+        // Check if web search is needed
+        const { needsSearch, queries } = detectSearchNeeds(prompt);
+        
+        if (needsSearch && queries.length > 0 && options.enableWebSearch !== false) {
+          // Use MCP-enhanced generation with web search
+          return await generateWithMCP(ollamaUrl, ollamaModel, prompt, {
+            ...options,
+            useWebSearch: true,
+            searchQueries: queries
+          });
+        }
+        
+        // Standard Ollama generation
         return await ollamaGenerate(ollamaUrl, ollamaModel, prompt, options);
       }
     };
@@ -43,4 +60,3 @@ export const createAIService = (config) => {
     }
   };
 };
-

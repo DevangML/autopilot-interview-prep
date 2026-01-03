@@ -29,33 +29,35 @@ export const useSession = () => {
   }, []);
 
   // Start new session
-  const startSession = useCallback(({ totalMinutes = SESSION_DURATIONS.DEFAULT, focusMode = FOCUS_MODES.BALANCED, units }) => {
-    const composed = composeSession({
-      totalMinutes,
-      focusMode,
-      reviewUnit: units?.review,
-      coreUnit: units?.core,
-      breadthUnit: units?.breadth
-    });
+  const startSession = useCallback(({ totalMinutes = SESSION_DURATIONS.DEFAULT, focusMode = FOCUS_MODES.BALANCED, units, isUntimed, questionCount }) => {
+    let composed;
+    
+    // Handle mood mode (untimed)
+    if (focusMode === FOCUS_MODES.MOOD && isUntimed) {
+      composed = {
+        totalMinutes: null,
+        focusMode: FOCUS_MODES.MOOD,
+        isUntimed: true,
+        questionCount: questionCount || units?.length || 5,
+        units: units || []
+      };
+    } else {
+      // Regular timed session
+      composed = composeSession({
+        totalMinutes,
+        focusMode,
+        reviewUnit: units?.review,
+        coreUnit: units?.core,
+        breadthUnit: units?.breadth
+      });
+    }
     
     const newSession = {
       ...composed,
       startTime: Date.now(),
-      currentUnitIndex: 0
+      currentUnitIndex: 0,
+      viewUnitIndex: 0
     };
-    
-    console.log('[useSession] Starting session with units:', {
-      focusMode,
-      unitOrder: composed.units.map((u, i) => ({
-        index: i,
-        type: u.type,
-        item: u.item?.name || 'none',
-        domain: u.item?.domain || 'none',
-        timeMinutes: u.timeMinutes
-      })),
-      currentUnit: composed.units[0]?.type || 'none',
-      currentItem: composed.units[0]?.item?.name || 'none'
-    });
     
     setSession(newSession);
     setIsActive(true);
@@ -106,9 +108,9 @@ export const useSession = () => {
       ? currentViewIndex + 1
       : currentViewIndex - 1;
     
-    // Can only view completed units or current unit (can't skip ahead)
+    // Allow viewing all units (both timed and untimed)
+    // Editing is still restricted to currentUnitIndex
     if (newIndex < 0 || newIndex >= session.units.length) return;
-    if (newIndex > session.currentUnitIndex) return; // Can't view future units
     
     const updated = {
       ...session,
@@ -126,14 +128,19 @@ export const useSession = () => {
   const viewUnitIndex = session?.viewUnitIndex !== undefined ? session.viewUnitIndex : session?.currentUnitIndex;
   const viewUnit = session?.units[viewUnitIndex] || null;
 
+  // Allow viewing all units (both timed and untimed)
+  // Editing is still restricted to currentUnitIndex
+  const canGoNext = session ? viewUnitIndex < session.units.length - 1 : false;
+  const canGoPrev = session ? viewUnitIndex > 0 : false;
+
   return {
     session,
     isActive,
     currentUnit,
     viewUnit,
     viewUnitIndex: viewUnitIndex ?? session?.currentUnitIndex ?? 0,
-    canGoNext: session ? viewUnitIndex < session.currentUnitIndex : false,
-    canGoPrev: session ? viewUnitIndex > 0 : false,
+    canGoNext,
+    canGoPrev,
     startSession,
     completeUnit,
     navigateUnit,

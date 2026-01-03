@@ -17,42 +17,83 @@ export const generateContent = async (baseUrl, model, prompt, options = {}) => {
     maxOutputTokens = 1000
   } = options;
 
-  const url = `${baseUrl || 'http://localhost:11434'}/api/generate`;
+  const resolvedUrl = baseUrl || 'http://localhost:11434';
+  const url = `${resolvedUrl}/api/generate`;
+  const resolvedModel = model || 'llama3';
   
   let attempt = 0;
   const maxAttempts = 3;
 
   while (attempt < maxAttempts) {
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: model || 'llama3',
-          prompt,
-          options: {
-            temperature,
-            num_predict: maxOutputTokens
-          },
-          stream: false
-        })
-      });
+      const requestBody = {
+        model: resolvedModel,
+        prompt,
+        options: {
+          temperature,
+          num_predict: maxOutputTokens
+        },
+        stream: false
+      };
+      
+      const fetchStartTime = Date.now();
+      
+      // Add timeout to detect hanging requests
+      const controller = new AbortController();
+      let timeoutFired = false;
+      const timeoutId = setTimeout(() => {
+        timeoutFired = true;
+        controller.abort();
+      }, 30000); // 30 second timeout
+      
+      let response;
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        const fetchDuration = Date.now() - fetchStartTime;
+        const isAbortError = fetchError.name === 'AbortError' || fetchError.name === 'DOMException';
+        const isTimeout = timeoutFired || (isAbortError && fetchDuration >= 29000);
+        
+        // Provide better error messages
+        if (isTimeout) {
+          throw new Error(`Ollama request timed out after ${Math.round(fetchDuration/1000)}s. The Ollama server may be slow or unresponsive. Check that Ollama is running and the model "${resolvedModel}" is installed.`);
+        } else if (isAbortError) {
+          throw new Error(`Ollama request was aborted. This may indicate a timeout or connection issue. Check that Ollama is running at ${resolvedUrl}.`);
+        } else if (fetchError.message?.includes('Failed to fetch') || fetchError.message?.includes('NetworkError')) {
+          throw new Error(`Cannot connect to Ollama at ${resolvedUrl}. Make sure Ollama is running and accessible.`);
+        }
+        
+        throw fetchError;
+      }
 
       if (!response.ok) {
-        // Check if Ollama is running
         if (response.status === 404 || response.status === 0) {
           throw new Error('Ollama is not running. Please start Ollama and ensure the model is installed.');
         }
-        throw new Error(`Ollama API error: ${response.status}`);
+        
+        const errorText = await response.text().catch(() => 'Unable to read error response');
+        throw new Error(`Ollama API error: ${response.status} - ${errorText.substring(0, 100)}`);
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (jsonError) {
+        throw new Error(`Failed to parse Ollama response: ${jsonError.message}`);
+      }
       
       const text = data.response || '';
       
       if (!text && attempt < maxAttempts - 1) {
         attempt++;
-        continue; // Retry
+        continue;
       }
 
       if (!text) {
@@ -62,15 +103,20 @@ export const generateContent = async (baseUrl, model, prompt, options = {}) => {
       return { text, raw: data };
     } catch (error) {
       if (attempt === maxAttempts - 1) {
-        // Provide helpful error messages
-        if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
-          throw new Error('Cannot connect to Ollama. Make sure Ollama is running on ' + (baseUrl || 'http://localhost:11434'));
+        const isTimeout = error.message?.includes('timed out') || error.message?.includes('timeout');
+        const isAbort = error.message?.includes('aborted') || error.message?.includes('signal is aborted');
+        const isNetworkError = error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError') || error.message?.includes('Cannot connect');
+        
+        if (isTimeout || isAbort) {
+          throw error;
+        } else if (isNetworkError) {
+          throw new Error('Cannot connect to Ollama. Make sure Ollama is running on ' + resolvedUrl);
         }
         throw new Error(`Ollama request failed after ${maxAttempts} attempts: ${error.message}`);
       }
       attempt++;
-      // Wait a bit before retrying
-      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      const waitTime = 1000 * (attempt + 1);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
     }
   }
 };
@@ -81,15 +127,18 @@ export const generateContent = async (baseUrl, model, prompt, options = {}) => {
  * @returns {Promise<Array>} List of available models
  */
 export const listModels = async (baseUrl = 'http://localhost:11434') => {
+  const url = `${baseUrl}/api/tags`;
+  
   try {
-    const response = await fetch(`${baseUrl}/api/tags`);
+    const response = await fetch(url);
+    
     if (!response.ok) {
       throw new Error(`Ollama API error: ${response.status}`);
     }
+    
     const data = await response.json();
     return data.models || [];
   } catch (error) {
-    console.error('Failed to list Ollama models:', error);
     return [];
   }
 };
@@ -100,11 +149,12 @@ export const listModels = async (baseUrl = 'http://localhost:11434') => {
  * @returns {Promise<boolean>} True if Ollama is accessible
  */
 export const checkOllamaConnection = async (baseUrl = 'http://localhost:11434') => {
+  const url = `${baseUrl}/api/tags`;
+  
   try {
-    const response = await fetch(`${baseUrl}/api/tags`, { method: 'GET' });
+    const response = await fetch(url, { method: 'GET' });
     return response.ok;
-  } catch {
+  } catch (error) {
     return false;
   }
 };
-
