@@ -418,6 +418,63 @@ app.delete('/external-attempts/:id', authMiddleware, requireAllowed, (req, res) 
   res.status(204).send();
 });
 
+// Reset domain progress (uncomplete all items in a domain)
+app.post('/items/reset-domain', authMiddleware, requireAllowed, (req, res) => {
+  const { domain } = req.body || {};
+  if (!domain) {
+    res.status(400).json({ error: 'Missing domain.' });
+    return;
+  }
+
+  // Reset completed status for all items in the domain (both items and learning_items tables)
+  const result1 = db.prepare(`
+    update items 
+    set completed = 0, updated_at = datetime('now')
+    where user_id = ? and domain = ?
+  `).run(req.user.id, domain);
+
+  const result2 = db.prepare(`
+    update learning_items 
+    set completed = 0, updated_at = datetime('now')
+    where user_id = ? and domain = ?
+  `).run(req.user.id, domain);
+
+  res.json({
+    success: true,
+    itemsUpdated: result1.changes,
+    learningItemsUpdated: result2.changes,
+    totalUpdated: result1.changes + result2.changes
+  });
+});
+
+// Uncomplete a single item
+app.patch('/items/:id/uncomplete', authMiddleware, requireAllowed, (req, res) => {
+  const { id } = req.params;
+  
+  // Try to update in items table first
+  let result = db.prepare(`
+    update items 
+    set completed = 0, updated_at = datetime('now')
+    where id = ? and user_id = ?
+  `).run(id, req.user.id);
+
+  // If not found in items, try learning_items
+  if (result.changes === 0) {
+    result = db.prepare(`
+      update learning_items 
+      set completed = 0, updated_at = datetime('now')
+      where id = ? and user_id = ?
+    `).run(id, req.user.id);
+  }
+
+  if (result.changes === 0) {
+    res.status(404).json({ error: 'Item not found.' });
+    return;
+  }
+
+  res.json({ success: true, updated: true });
+});
+
 app.listen(PORT, () => {
   console.log(`Local API running at http://localhost:${PORT}`);
 });

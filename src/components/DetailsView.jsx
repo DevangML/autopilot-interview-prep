@@ -4,8 +4,8 @@
  */
 
 import { useState, useMemo, useEffect } from 'react';
-import { X, List, Grid, Layers, Search, Filter } from 'lucide-react';
-import { fetchItemsBySourceDatabase } from '../services/dataStore.js';
+import { X, List, Grid, Layers, Search, Filter, RotateCcw } from 'lucide-react';
+import { fetchItemsBySourceDatabase, uncompleteItem } from '../services/dataStore.js';
 
 const VIEW_MODES = {
   QUESTIONS: 'questions',
@@ -32,6 +32,7 @@ export const DetailsView = ({ databases, onClose }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCompleted, setFilterCompleted] = useState('all'); // 'all', 'completed', 'pending'
+  const [uncompletingItemId, setUncompletingItemId] = useState(null);
 
   // Load items when domain changes or on mount
   useEffect(() => {
@@ -261,7 +262,7 @@ export const DetailsView = ({ databases, onClose }) => {
                             : 'bg-white/5 border-white/10'
                         }`}
                       >
-                        <div className="flex items-start justify-between">
+                        <div className="flex items-start justify-between gap-2">
                           <div className="flex-1">
                             <div className="font-medium text-white">{item.name || 'Untitled'}</div>
                             {item.pattern && (
@@ -273,11 +274,39 @@ export const DetailsView = ({ databases, onClose }) => {
                               </div>
                             )}
                           </div>
-                          {item.completed && (
-                            <span className="px-2 py-1 text-xs font-medium rounded bg-emerald-500/20 text-emerald-300">
-                              Done
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {item.completed && (
+                              <>
+                                <span className="px-2 py-1 text-xs font-medium rounded bg-emerald-500/20 text-emerald-300">
+                                  Done
+                                </span>
+                                <button
+                                  onClick={async () => {
+                                    if (!window.confirm('Mark this item as incomplete? Attempts will remain unchanged.')) {
+                                      return;
+                                    }
+                                    setUncompletingItemId(item.id);
+                                    try {
+                                      await uncompleteItem(item.id);
+                                      // Update local state
+                                      setItems(prevItems => 
+                                        prevItems.map(i => i.id === item.id ? { ...i, completed: 0 } : i)
+                                      );
+                                    } catch (error) {
+                                      alert(`Error: ${error.message}`);
+                                    } finally {
+                                      setUncompletingItemId(null);
+                                    }
+                                  }}
+                                  disabled={uncompletingItemId === item.id}
+                                  className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-50"
+                                  title="Mark as incomplete"
+                                >
+                                  <RotateCcw className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}

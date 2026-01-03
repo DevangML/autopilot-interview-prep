@@ -121,3 +121,16 @@ export const deleteExternalAttempt = async (id) => {
     method: 'DELETE'
   });
 };
+
+export const resetDomainProgress = async (domain) => {
+  return apiFetch('/items/reset-domain', {
+    method: 'POST',
+    body: JSON.stringify({ domain })
+  });
+};
+
+export const uncompleteItem = async (itemId) => {
+  return apiFetch(`/items/${itemId}/uncomplete`, {
+    method: 'PATCH'
+  });
+};

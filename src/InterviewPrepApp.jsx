@@ -22,7 +22,8 @@ import {
   fetchSourceDatabases,
   confirmSourceDatabaseSchema,
   importCsvs,
-  updateSourceDatabaseDomain
+  updateSourceDatabaseDomain,
+  resetDomainProgress
 } from './services/dataStore.js';
 import { DOMAINS } from './core/domains.js';
 
@@ -745,6 +746,48 @@ function InterviewPrepApp() {
                 <div className="mt-2 text-xs text-green-200">{importMessage}</div>
               )}
             </div>
+
+            <div className="p-4 rounded-xl border bg-white/5 border-white/10">
+              <div className="text-xs font-semibold text-gray-400 mb-3 uppercase tracking-wider">
+                Reset Progress
+              </div>
+              <div className="text-sm text-gray-300 mb-3">
+                Reset completion status for all items in a domain. Attempts will remain unchanged.
+              </div>
+              <select
+                id="reset-domain-select"
+                className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-red-500/40 outline-none text-gray-200 mb-3"
+              >
+                <option value="">Select a domain...</option>
+                {Object.keys(databaseMapping).map(domain => (
+                  <option key={domain} value={domain}>{domain}</option>
+                ))}
+              </select>
+              <button
+                onClick={async () => {
+                  const select = document.getElementById('reset-domain-select');
+                  const domain = select?.value;
+                  if (!domain) {
+                    alert('Please select a domain');
+                    return;
+                  }
+                  if (!window.confirm(`Are you sure you want to reset progress for ${domain}? All items will be marked as incomplete. Attempts will remain unchanged.`)) {
+                    return;
+                  }
+                  try {
+                    const result = await resetDomainProgress(domain);
+                    alert(`Reset complete! ${result.totalUpdated} items updated.`);
+                    await refreshDatabases();
+                    select.value = '';
+                  } catch (err) {
+                    setError(err.message);
+                  }
+                }}
+                className="w-full py-2.5 text-sm font-medium text-red-300 rounded-lg border bg-red-500/10 hover:bg-red-500/20 border-red-500/30"
+              >
+                Reset Domain Progress
+              </button>
+            </div>
           </div>
 
           <div className="flex gap-2 mt-6">
@@ -767,7 +810,7 @@ function InterviewPrepApp() {
               }}
               className="flex-1 py-3.5 font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl shadow-xl hover:from-blue-500 hover:to-indigo-500"
             >
-              Save
+              Save Settings
             </button>
           </div>
         </div>
