@@ -662,10 +662,9 @@ app.post('/ollama/ensure-running', authMiddleware, requireAllowed, async (req, r
 
 app.post('/ollama/stop', authMiddleware, requireAllowed, async (req, res) => {
   try {
-    const { model } = req.body || {};
-    const modelName = model || 'qwen2.5:7b'; // Default to recommended model
-    await stopOllama(modelName);
-    res.json({ success: true, message: `Ollama stopped (model: ${modelName})` });
+    // Stop all running models (model parameter is optional, ignored if not provided)
+    await stopOllama();
+    res.json({ success: true, message: 'All Ollama models stopped successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message || 'Failed to stop Ollama' });
   }

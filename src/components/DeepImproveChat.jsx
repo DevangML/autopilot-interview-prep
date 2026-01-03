@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { X, Sparkles, Loader2, Send, Plus, CheckCircle, AlertCircle, Globe } from 'lucide-react';
-import { SkeletonText } from './Skeleton.jsx';
+import { Skeleton, SkeletonText } from './Skeleton.jsx';
 import { createItem, fetchItemsBySourceDatabase } from '../services/dataStore.js';
 
 /**
@@ -607,8 +607,8 @@ Engage with the user's question or argument. Use web search if discussing curren
 
           {isLoading && !isStreaming && (
             <div className="flex justify-start">
-              <div className="p-3 rounded-lg bg-white/5">
-                <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+              <div className="max-w-[80%] p-3 rounded-lg bg-white/5">
+                <SkeletonText lines={3} />
               </div>
             </div>
           )}

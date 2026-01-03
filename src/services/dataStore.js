@@ -177,6 +177,13 @@ export const uncompleteItem = async (itemId) => {
   });
 };
 
+export const stopOllama = async () => {
+  return await apiFetch('/ollama/stop', {
+    method: 'POST'
+    // No body needed - stops all running models
+  });
+};
+
 export const createItem = async (itemData) => {
   console.log('[dataStore] createItem called with:', itemData);
   try {

@@ -19,6 +19,7 @@ import { orchestrateSession, orchestrateMoodSession } from './core/sessionOrches
 import { composeMoodSession, FOCUS_MODES } from './core/session.js';
 import { createAIService, AI_PROVIDERS } from './services/aiService.js';
 import { checkOllamaConnection, listModels } from './services/ollama.js';
+import { stopOllama as stopOllamaService } from './services/dataStore.js';
 import {
   fetchItemsBySourceDatabase,
   fetchSourceDatabases,
@@ -76,6 +77,7 @@ function InterviewPrepApp() {
   const [ollamaModel, setOllamaModel] = useState('qwen2.5:7b');
   const [ollamaModels, setOllamaModels] = useState([]);
   const [isCheckingOllama, setIsCheckingOllama] = useState(false);
+  const [isStoppingOllama, setIsStoppingOllama] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importMessage, setImportMessage] = useState(null);
   const [unknownIndex, setUnknownIndex] = useState(0);
@@ -631,6 +633,32 @@ function InterviewPrepApp() {
                     </div>
                     <p className="mt-1 text-xs text-gray-500">
                       Recommended: <strong>qwen2.5:7b</strong> (best for coding/DSA). Install with: <code className="bg-white/5 px-1 rounded">ollama pull qwen2.5:7b</code>
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-gray-400 mb-2 uppercase tracking-wider">
+                      Ollama Control
+                    </label>
+                    <button
+                      onClick={async () => {
+                        setIsStoppingOllama(true);
+                        try {
+                          await stopOllamaService();
+                          alert('✅ All Ollama models stopped successfully. Memory freed!');
+                        } catch (error) {
+                          console.error('[Settings] Error stopping Ollama:', error);
+                          alert(`❌ Failed to stop Ollama: ${error.message || 'Unknown error'}`);
+                        } finally {
+                          setIsStoppingOllama(false);
+                        }
+                      }}
+                      disabled={isStoppingOllama}
+                      className="w-full px-4 py-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded-xl text-sm text-red-300 font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {isStoppingOllama ? '🛑 Stopping All Models...' : '🛑 Stop All Ollama Models'}
+                    </button>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Finds and stops all running Ollama models to free up system memory. Ollama will restart automatically when needed.
                     </p>
                   </div>
                 </>

@@ -93,22 +93,67 @@ export const startOllama = async () => {
 
 /**
  * Stop Ollama service
- * Stops the specified model, then kills the service process
- * @param {string} modelName - Model name to stop (default: 'qwen2.5:7b')
+ * Stops all running models, then kills the service process
+ * @param {string} modelName - Optional specific model to stop (if not provided, stops all)
  */
-export const stopOllama = async (modelName = 'qwen2.5:7b') => {
+export const stopOllama = async (modelName = null) => {
   if (shutdownTimer) {
     clearTimeout(shutdownTimer);
     shutdownTimer = null;
   }
 
-  // Step 1: Stop the specific model gracefully
+  // Step 1: Stop all running models gracefully
   try {
-    await execAsync(`ollama stop ${modelName}`);
-    console.log(`[OllamaManager] Stopped model: ${modelName}`);
+    // Get list of all running models
+    const { stdout } = await execAsync('ollama ps --json');
+    const stdoutTrimmed = stdout.trim();
+    
+    if (!stdoutTrimmed) {
+      console.log('[OllamaManager] No running models found');
+    } else {
+      // Parse newline-delimited JSON (each line is a JSON object)
+      const lines = stdoutTrimmed.split('\n').filter(line => line.trim());
+      const runningModels = [];
+      
+      for (const line of lines) {
+        try {
+          const modelInfo = JSON.parse(line);
+          runningModels.push(modelInfo);
+        } catch (parseError) {
+          console.warn('[OllamaManager] Failed to parse model line:', line);
+        }
+      }
+      
+      if (runningModels.length > 0) {
+        // Stop each running model
+        for (const modelInfo of runningModels) {
+          const modelToStop = modelInfo.name || modelInfo.model;
+          if (modelToStop) {
+            try {
+              await execAsync(`ollama stop ${modelToStop}`);
+              console.log(`[OllamaManager] Stopped model: ${modelToStop}`);
+            } catch (error) {
+              console.log(`[OllamaManager] Could not stop model ${modelToStop}:`, error.message);
+            }
+          }
+        }
+        console.log(`[OllamaManager] Stopped ${runningModels.length} model(s)`);
+      } else {
+        console.log('[OllamaManager] No running models found');
+      }
+    }
   } catch (error) {
-    // Model might already be stopped or not running, that's okay
-    console.log(`[OllamaManager] Could not stop model ${modelName} (may not be running):`, error.message);
+    // ollama ps might fail if service isn't running, try to stop specific model if provided
+    if (modelName) {
+      try {
+        await execAsync(`ollama stop ${modelName}`);
+        console.log(`[OllamaManager] Stopped model: ${modelName}`);
+      } catch (stopError) {
+        console.log(`[OllamaManager] Could not stop model ${modelName}:`, stopError.message);
+      }
+    } else {
+      console.log('[OllamaManager] Could not list running models (service may not be running)');
+    }
   }
 
   // Step 2: Kill our process reference if we have one
