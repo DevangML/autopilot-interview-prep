@@ -7,10 +7,13 @@
     "storage",
     "activeTab",
     "scripting",
-    "tabs"
+    "tabs",
+    "identity"
   ],
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*",
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*",
     "<all_urls>"
   ],
   "action": {

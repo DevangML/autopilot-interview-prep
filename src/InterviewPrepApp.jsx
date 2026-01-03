@@ -390,7 +390,12 @@ function InterviewPrepApp() {
   const handleGoogleCredential = useCallback(async (credential) => {
     setError(null);
     try {
-      await signInWithGoogleCredential(credential);
+      // Handle both formats: string (ID token) or object { token, user, idToken }
+      if (typeof credential === 'object' && credential.token && credential.user) {
+        await signInWithGoogleCredential(credential.idToken || credential.token, credential.token, credential.user);
+      } else {
+        await signInWithGoogleCredential(credential);
+      }
     } catch (err) {
       setError(err.message);
     }

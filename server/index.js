@@ -13,6 +13,7 @@ import { ensureOllamaRunning, stopOllama, getOllamaStatus, isOllamaRunning } fro
 
 const PORT = process.env.API_PORT || 3001;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const JWT_SECRET = process.env.LOCAL_JWT_SECRET;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || 'devangmanjramkar@gmail.com,harshmanjramkar@gmail.com')
@@ -24,14 +25,42 @@ if (!GOOGLE_CLIENT_ID) {
   throw new Error('Missing GOOGLE_CLIENT_ID.');
 }
 
+if (!GOOGLE_CLIENT_SECRET) {
+  throw new Error('Missing GOOGLE_CLIENT_SECRET (required for code exchange).');
+}
+
 if (!JWT_SECRET) {
   throw new Error('Missing LOCAL_JWT_SECRET.');
 }
 
-const oauthClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+const oauthClient = new OAuth2Client({
+  clientId: GOOGLE_CLIENT_ID,
+  clientSecret: GOOGLE_CLIENT_SECRET,
+});
 const app = express();
 
-app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
+// CORS configuration: Allow frontend origin and Chrome extension origins
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, Postman, or Chrome extensions)
+    if (!origin) {
+      return callback(null, true);
+    }
+    // Allow frontend origin
+    if (origin === FRONTEND_ORIGIN) {
+      return callback(null, true);
+    }
+    // Allow Chrome extension origins (chrome-extension://*)
+    if (origin.startsWith('chrome-extension://')) {
+      return callback(null, true);
+    }
+    // Reject other origins
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '2mb' }));
 
 if (ALLOWED_EMAILS.length > 0) {
@@ -120,6 +149,68 @@ app.post('/auth/dev', (req, res) => {
   
   const token = signToken(user);
   res.json({ token, user });
+});
+
+// Exchange authorization code for ID token
+app.post('/auth/google/exchange', async (req, res) => {
+  const { code, redirectUri } = req.body || {};
+  
+  if (!code || !redirectUri) {
+    res.status(400).json({ error: 'Missing code or redirectUri.' });
+    return;
+  }
+
+  try {
+    // Exchange authorization code for tokens
+    const { tokens } = await oauthClient.getToken({
+      code,
+      redirect_uri: redirectUri,
+    });
+
+    if (!tokens.id_token) {
+      res.status(400).json({ error: 'No ID token in response.' });
+      return;
+    }
+
+    // Verify and decode the ID token
+    const ticket = await oauthClient.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    
+    const payload = ticket.getPayload();
+    if (!payload?.sub || !payload?.email) {
+      res.status(401).json({ error: 'Invalid Google token.' });
+      return;
+    }
+
+    const allowed = isEmailAllowed(payload.email);
+    const existing = getUserById(payload.sub);
+    if (!existing) {
+      db.prepare(`
+        insert into users (id, email, full_name, is_allowed)
+        values (?, ?, ?, ?)
+      `).run(payload.sub, payload.email, payload.name || null, allowed ? 1 : 0);
+    } else {
+      db.prepare(`
+        update users set email = ?, full_name = ?, is_allowed = ? where id = ?
+      `).run(payload.email, payload.name || null, allowed ? 1 : 0, payload.sub);
+      updateTimestamp('users', payload.sub);
+    }
+
+    const user = getUserById(payload.sub);
+    const token = signToken(user);
+    
+    // Return ID token for the extension to use
+    res.json({ 
+      idToken: tokens.id_token,
+      token, // JWT token for API calls
+      user 
+    });
+  } catch (err) {
+    console.error('[Auth] Code exchange error:', err.message);
+    res.status(401).json({ error: `Token exchange failed: ${err.message}` });
+  }
 });
 
 app.post('/auth/google', async (req, res) => {
