@@ -23,6 +23,7 @@ import { Mic, MicOff, Save, Loader2, Edit3 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveDryRunNote } from '../services/dataStore.js';
 import { useVoskSpeech } from '../hooks/useVoskSpeech.js';
+import { FileSystemHelper } from '../services/advancedWebFeatures.js';
 
 const PaperMode = {
   RULED: 'ruled',
@@ -454,7 +455,21 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
   }, []);
 
   /**
-   * Save note to database and file
+   * Generate note name with date suffix
+   */
+  const generateNoteName = useCallback(() => {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+    const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS
+    const domainPart = domain ? `${domain}_` : '';
+    const itemPart = itemId ? `item-${itemId}_` : '';
+    const baseName = noteName.trim() || 'notebook';
+    
+    return `${domainPart}${itemPart}${baseName}_${dateStr}_${timeStr}`;
+  }, [noteName, domain, itemId]);
+
+  /**
+   * Save note to database and file system
    */
   const handleSave = useCallback(async () => {
     if (isSaving) return;
@@ -493,37 +508,64 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
         handwritingProfile
       };
 
+      // Generate note name with date suffix
+      const noteTitle = noteName.trim() || generateNoteName();
+      const noteFileName = generateNoteName();
+
       // Save to database
       const saved = await saveDryRunNote({
         itemId: itemId || null,
         domain: domain || null,
-        title: `Notebook Mode - ${new Date().toLocaleString()}`,
+        title: noteTitle,
         type: 'notebook_mode',
         content,
         screenshotUrl
       });
 
-      // Also download as file
-      downloadNoteAsFile({
+      // Prepare note data for file
+      const noteData = {
         id: saved.id,
         itemId,
         domain,
-        title: `Notebook Mode - ${new Date().toLocaleString()}`,
+        title: noteTitle,
         type: 'notebook_mode',
         content,
         screenshotUrl,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      });
+      };
 
-      alert('Note saved successfully!');
+      // Save to file system using File System Access API (with fallback to download)
+      const result = await FileSystemHelper.saveFile(
+        noteData,
+        `${noteFileName}.json`,
+        'application/json'
+      );
+      
+      if (!result.success && !result.fallback) {
+        console.warn('[NotebookMode] File system save failed, using fallback');
+        // Fallback to download
+        const blob = new Blob([JSON.stringify(noteData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${noteFileName}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      alert(`Note "${noteTitle}" saved successfully!`);
+      setShowNameInput(false);
+      setNoteName('');
     } catch (error) {
       console.error('[NotebookMode] Save error:', error);
       alert('Failed to save note: ' + (error.message || 'Unknown error'));
     } finally {
       setIsSaving(false);
     }
-  }, [nodes, edges, paperMode, handwritingProfile, itemId, domain, isSaving]);
+  }, [nodes, edges, paperMode, handwritingProfile, itemId, domain, isSaving, noteName, generateNoteName]);
 
   return (
     <div className="notebook-mode" style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -626,15 +668,15 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
           </button>
         </div>
         <button
-          onClick={() => setIsListening(!isListening)}
-          disabled={!recognitionRef.current}
+          onClick={toggleVoskListening}
+          disabled={isModelLoading}
           style={{
             padding: '8px 12px',
             background: isListening ? '#FF6B6B' : '#4A90E2',
             color: 'white',
             border: 'none',
             borderRadius: '3px',
-            cursor: recognitionRef.current ? 'pointer' : 'not-allowed',
+            cursor: isModelLoading ? 'not-allowed' : 'pointer',
             fontSize: '12px',
             display: 'flex',
             alignItems: 'center',
@@ -649,30 +691,101 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
             {transcript}
           </div>
         )}
+        {isModelLoading && (
+          <div style={{ fontSize: '11px', color: '#4A90E2', maxWidth: '200px' }}>
+            Loading model: {loadingProgress}%
+          </div>
+        )}
         {speechError && (
           <div style={{ fontSize: '11px', color: '#FF6B6B', maxWidth: '200px' }}>
             {speechError}
           </div>
         )}
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          style={{
-            padding: '8px 12px',
-            background: isSaving ? '#ccc' : '#4A90E2',
-            color: 'white',
-            border: 'none',
-            borderRadius: '3px',
-            cursor: isSaving ? 'not-allowed' : 'pointer',
-            fontSize: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '5px'
-          }}
-        >
-          <Save size={14} />
-          {isSaving ? 'Saving...' : 'Save Note'}
-        </button>
+        {partialTranscript && (
+          <div style={{ fontSize: '11px', color: '#666', maxWidth: '200px', fontStyle: 'italic' }}>
+            {partialTranscript}
+          </div>
+        )}
+        {showNameInput ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            <input
+              type="text"
+              value={noteName}
+              onChange={(e) => setNoteName(e.target.value)}
+              placeholder="Note name (optional)"
+              style={{
+                padding: '5px',
+                border: '1px solid #ccc',
+                borderRadius: '3px',
+                fontSize: '12px'
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSave();
+                } else if (e.key === 'Escape') {
+                  setShowNameInput(false);
+                  setNoteName('');
+                }
+              }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <button
+                onClick={handleSave}
+                disabled={isSaving}
+                style={{
+                  padding: '5px 10px',
+                  background: isSaving ? '#ccc' : '#4A90E2',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '3px',
+                  cursor: isSaving ? 'not-allowed' : 'pointer',
+                  fontSize: '11px',
+                  flex: 1
+                }}
+              >
+                {isSaving ? 'Saving...' : 'Save'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowNameInput(false);
+                  setNoteName('');
+                }}
+                style={{
+                  padding: '5px 10px',
+                  background: '#f0f0f0',
+                  color: 'black',
+                  border: 'none',
+                  borderRadius: '3px',
+                  cursor: 'pointer',
+                  fontSize: '11px'
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowNameInput(true)}
+            disabled={isSaving}
+            style={{
+              padding: '8px 12px',
+              background: isSaving ? '#ccc' : '#4A90E2',
+              color: 'white',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: isSaving ? 'not-allowed' : 'pointer',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <Save size={14} />
+            {isSaving ? 'Saving...' : 'Save Note'}
+          </button>
+        )}
       </div>
 
       {/* Timeline Controls */}
