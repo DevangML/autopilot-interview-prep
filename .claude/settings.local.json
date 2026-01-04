@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(npm install:*)",
+      "Bash(cat:*)",
+      "mcp__plugin_serena_serena__replace_content",
+      "Bash(npm run build:*)"
     ]
   }
 }

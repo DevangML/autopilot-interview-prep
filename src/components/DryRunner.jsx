@@ -17,12 +17,13 @@ import ReactFlow, {
   Position
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Mic, MicOff, Download, X, RotateCcw, Edit2, Save } from 'lucide-react';
+import { Mic, MicOff, Download, X, RotateCcw, Edit2, Save, Loader2 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { understandVoiceCommand, getDataStructureColors } from '../services/dryRunnerAI.js';
 import { saveDryRunnerCorrection, getDryRunnerCorrections, saveDryRunNote } from '../services/dataStore.js';
 import { downloadNoteAsFile } from '../utils/noteExporter.js';
 import { smartDebug, debugNetwork, debugErrors } from '../services/debugHelper.js';
+import { useWhisperSpeech, WHISPER_MODELS } from '../hooks/useWhisperSpeech.js';
 
 // Editable Array Node with individual cell editing
 const ArrayNode = ({ data, selected }) => {
@@ -687,10 +688,7 @@ const nodeTypes = {
 export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [isListening, setIsListening] = useState(false);
-  const [transcript, setTranscript] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [speechError, setSpeechError] = useState(null);
   const [sessionContext, setSessionContext] = useState({
     shapes: [],
     variables: {},
@@ -699,10 +697,35 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
   const [correctionMessage, setCorrectionMessage] = useState(null);
   const [historicalCorrections, setHistoricalCorrections] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
-  
-  const recognitionRef = useRef(null);
+
   const nodeIdCounter = useRef(0);
   const flowRef = useRef(null);
+  const processVoiceCommandRef = useRef(null);
+
+  // Local Whisper-based speech recognition (100% offline, free)
+  const {
+    isListening,
+    isLoading: isModelLoading,
+    isReady: isModelReady,
+    transcript,
+    error: speechError,
+    loadingProgress,
+    status: speechStatus,
+    initialize: initializeWhisper,
+    toggleListening: toggleWhisperListening,
+    startListening,
+    stopListening,
+  } = useWhisperSpeech({
+    modelId: WHISPER_MODELS.TINY_EN, // Fastest, ~40MB
+    continuous: true,
+    silenceDuration: 1500,
+    onTranscript: (text) => {
+      if (text.trim() && processVoiceCommandRef.current) {
+        console.log('[DryRunner] Processing Whisper transcript:', text);
+        processVoiceCommandRef.current(text.trim());
+      }
+    },
+  });
 
   // Load historical corrections on mount
   useEffect(() => {
@@ -713,11 +736,11 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
     try {
       const corrections = await getDryRunnerCorrections();
       setHistoricalCorrections(corrections);
-      
+
       const learnedPatterns = corrections
         .filter(c => c.learned_pattern)
         .map(c => c.learned_pattern);
-      
+
       setSessionContext((ctx) => ({
         ...ctx,
         learnedPatterns
@@ -727,259 +750,10 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
     }
   };
 
-  // Initialize Web Speech API with better error handling
+  // Keep processVoiceCommand ref updated for Whisper callback
   useEffect(() => {
-    // Check browser support
-    if (typeof window === 'undefined') return;
-    
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setSpeechError('Speech recognition not supported in this browser. Please use Chrome, Edge, or Safari.');
-      console.warn('Speech recognition not supported');
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      recognition.maxAlternatives = 1;
-
-      recognition.onstart = () => {
-        console.log('[DryRunner] Speech recognition started');
-        setSpeechError(null);
-      };
-
-      recognition.onresult = (event) => {
-        let interimTranscript = '';
-        let finalTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-
-        setTranscript(interimTranscript || finalTranscript);
-
-        // Process final transcript
-        if (finalTranscript.trim()) {
-          console.log('[DryRunner] Processing command:', finalTranscript.trim());
-          processVoiceCommand(finalTranscript.trim());
-        }
-      };
-
-      recognition.onerror = (event) => {
-        console.error('[DryRunner] Speech recognition error:', event.error, 'State:', recognitionRef.current?.state);
-        
-        if (event.error === 'not-allowed') {
-          setSpeechError('Microphone permission denied. Please allow microphone access.');
-          setIsListening(false);
-        } else if (event.error === 'no-speech') {
-          // Ignore - user might be pausing
-          console.log('[DryRunner] No speech detected');
-          setSpeechError(null); // Clear error for no-speech
-        } else if (event.error === 'aborted') {
-          // User stopped or page changed
-          console.log('[DryRunner] Recognition aborted');
-          setIsListening(false);
-        } else if (event.error === 'network') {
-          // Network error - Web Speech API can't reach Google's servers
-          // This is NOT about HTTP requests, it's about the speech recognition service
-          console.warn('[DryRunner] Web Speech API network error (connection to Google servers), will retry...');
-          setSpeechError('Network error. Retrying...');
-          
-          // Check recognition state directly, not isListening (which may be stale)
-          const checkRecognitionState = () => {
-            if (!recognitionRef.current) return false;
-            const state = recognitionRef.current.state;
-            // Can retry if not stopped and not already starting
-            return state !== 'stopped' && state !== 'starting';
-          };
-          
-          // Retry after a short delay
-          setTimeout(() => {
-            if (!checkRecognitionState()) {
-              console.log('[DryRunner] Retry skipped - recognition state:', recognitionRef.current?.state);
-              // If recognition is stopped but we want to keep listening, restart it
-              if (isListening && recognitionRef.current) {
-                try {
-                  recognitionRef.current.start();
-                  setSpeechError(null);
-                  console.log('[DryRunner] Restarted recognition after network error');
-                } catch (e) {
-                  if (e.name !== 'InvalidStateError' || !e.message?.includes('already started')) {
-                    console.error('[DryRunner] Restart failed:', e);
-                  }
-                }
-              }
-              return;
-            }
-            
-            try {
-              const currentState = recognitionRef.current.state;
-              // Only stop if actively listening (not already stopped)
-              if (currentState === 'listening' || currentState === 'starting') {
-                recognitionRef.current.stop();
-              }
-              
-              setTimeout(() => {
-                // Check again before starting
-                if (!checkRecognitionState() && !isListening) {
-                  return; // User stopped listening
-                }
-                
-                try {
-                  recognitionRef.current.start();
-                  setSpeechError(null);
-                  console.log('[DryRunner] Network retry successful');
-                } catch (e) {
-                  if (e.name === 'InvalidStateError' && e.message?.includes('already started')) {
-                    // Already started, that's fine
-                    setSpeechError(null);
-                  } else {
-                    console.error('[DryRunner] Retry start failed:', e);
-                    // Don't show error if user stopped listening
-                    if (isListening) {
-                      setSpeechError('Network error. Please check your internet connection.');
-                    }
-                  }
-                }
-              }, 500);
-            } catch (e) {
-              console.error('[DryRunner] Retry stop failed:', e);
-              // Try to start anyway if we should be listening
-              if (isListening && checkRecognitionState()) {
-                try {
-                  recognitionRef.current.start();
-                  setSpeechError(null);
-                } catch (startError) {
-                  console.error('[DryRunner] Retry start after stop error failed:', startError);
-                  if (isListening) {
-                    setSpeechError('Network error. Please check your internet connection.');
-                  }
-                }
-              }
-            }
-          }, 1000);
-        } else if (event.error === 'audio-capture') {
-          setSpeechError('No microphone found. Please connect a microphone.');
-          setIsListening(false);
-        } else if (event.error === 'service-not-allowed') {
-          setSpeechError('Speech recognition service not allowed. Please check browser settings.');
-          setIsListening(false);
-        } else {
-          setSpeechError(`Speech error: ${event.error}. Try refreshing the page.`);
-          setIsListening(false);
-        }
-      };
-
-      recognition.onend = () => {
-        console.log('[DryRunner] Speech recognition ended, state:', recognitionRef.current?.state);
-        
-        // Restart if still supposed to be listening
-        // Use a ref to check current state, not closure variable
-        if (isListening) {
-          // Add delay to prevent rapid restart loops
-          setTimeout(() => {
-            // Check both isListening state and recognition ref
-            if (isListening && recognitionRef.current) {
-              try {
-                const currentState = recognitionRef.current.state;
-                // Only start if not already starting or listening
-                if (currentState !== 'starting' && currentState !== 'listening') {
-                  recognitionRef.current.start();
-                  console.log('[DryRunner] Restarted recognition');
-                } else {
-                  console.log('[DryRunner] Recognition already active, state:', currentState);
-                }
-              } catch (e) {
-                // If error is "already started", that's fine
-                if (e.message && e.message.includes('already started')) {
-                  console.log('[DryRunner] Recognition already running');
-                } else {
-                  console.warn('[DryRunner] Could not restart recognition:', e);
-                  // Only stop if it's a real error, not just "already started"
-                  if (e.name !== 'InvalidStateError') {
-                    setIsListening(false);
-                    setSpeechError('Failed to restart. Please try again.');
-                  }
-                }
-              }
-            }
-          }, 300); // Increased delay to prevent rapid restarts
-        }
-      };
-
-      recognitionRef.current = recognition;
-
-      return () => {
-        if (recognitionRef.current) {
-          try {
-            recognitionRef.current.stop();
-          } catch (e) {
-            // Ignore errors on cleanup
-          }
-        }
-      };
-    } catch (error) {
-      console.error('[DryRunner] Failed to initialize speech recognition:', error);
-      setSpeechError(`Failed to initialize: ${error.message}`);
-    }
-  }, []); // Only run once on mount
-
-  // Handle listening state changes
-  useEffect(() => {
-    if (!recognitionRef.current) return;
-
-    if (isListening) {
-      // Add a small delay to ensure recognition is ready
-      const startTimeout = setTimeout(async () => {
-        try {
-          recognitionRef.current.start();
-          console.log('[DryRunner] Started listening');
-          setSpeechError(null);
-        } catch (error) {
-          console.error('[DryRunner] Failed to start:', error);
-          
-          // Get debug info when start fails
-          const debugInfo = await smartDebug(`Speech recognition start failed: ${error.message}`);
-          fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:875',message:'Start failed - debug info',data:{errorName:error.name,errorMessage:error.message,recognitionState:recognitionRef.current?.state,debugInfo:debugInfo.formatted},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'START_FAILED'})}).catch(()=>{});
-          
-          // Handle specific error cases
-          if (error.name === 'InvalidStateError' && error.message.includes('already started')) {
-            // Already started, that's fine
-            console.log('[DryRunner] Already listening');
-            setSpeechError(null);
-          } else if (error.message && error.message.includes('network')) {
-            const networkDebug = await debugNetwork();
-            fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:886',message:'Network error on start',data:{networkDebug:networkDebug.formatted},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'NETWORK_START'})}).catch(()=>{});
-            setSpeechError('Network error. Please check your internet connection.');
-            setIsListening(false);
-          } else {
-            setSpeechError(`Failed to start: ${error.message || error.name}. Try refreshing the page.`);
-            setIsListening(false);
-          }
-        }
-      }, 100);
-
-      return () => clearTimeout(startTimeout);
-    } else {
-      try {
-        recognitionRef.current.stop();
-        console.log('[DryRunner] Stopped listening');
-        setSpeechError(null);
-      } catch (error) {
-        // Ignore errors when stopping (might already be stopped)
-        console.log('[DryRunner] Stop called (may already be stopped)');
-      }
-    }
-  }, [isListening]);
+    processVoiceCommandRef.current = processVoiceCommand;
+  });
 
   const processVoiceCommand = async (command) => {
     if (isProcessing) return;
@@ -1105,13 +879,9 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
     }
   };
 
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      setSpeechError('Speech recognition not available. Please use Chrome, Edge, or Safari.');
-      return;
-    }
-
-    setIsListening(!isListening);
+  // Toggle Whisper-based speech recognition
+  const toggleListening = async () => {
+    await toggleWhisperListening();
   };
 
   const handleScreenshot = async () => {
@@ -1227,13 +997,21 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
           <div className="flex items-center gap-2">
             <button
               onClick={toggleListening}
+              disabled={isModelLoading}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                isListening
-                  ? 'bg-red-500 hover:bg-red-600 text-white'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+                isModelLoading
+                  ? 'bg-yellow-600 hover:bg-yellow-700 text-white cursor-wait'
+                  : isListening
+                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
               }`}
             >
-              {isListening ? (
+              {isModelLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 inline mr-2 animate-spin" />
+                  Loading Model {loadingProgress > 0 ? `${loadingProgress}%` : '...'}
+                </>
+              ) : isListening ? (
                 <>
                   <MicOff className="w-4 h-4 inline mr-2" />
                   Stop Listening
@@ -1241,7 +1019,7 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
               ) : (
                 <>
                   <Mic className="w-4 h-4 inline mr-2" />
-                  Start Listening
+                  Start Listening (Local)
                 </>
               )}
             </button>
