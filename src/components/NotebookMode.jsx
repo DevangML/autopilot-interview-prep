@@ -23,6 +23,7 @@ import { Mic, MicOff, Save } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveDryRunNote } from '../services/dataStore.js';
 import { downloadNoteAsFile } from '../utils/noteExporter.js';
+import { smartDebug, debugNetwork, debugErrors } from '../services/debugHelper.js';
 
 const PaperMode = {
   RULED: 'ruled',
@@ -450,11 +451,13 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
     };
 
     recognition.onerror = (event) => {
-      console.error('[NotebookMode] Speech recognition error:', event.error);
+      console.error('[NotebookMode] Speech recognition error:', event.error, 'State:', recognitionRef.current?.state);
 
       if (!isMountedRef.current) return;
 
       if (event.error === 'network') {
+        // Web Speech API network error - connection to Google servers failed
+        // This is NOT about HTTP requests
         if (isMountedRef.current) {
           setSpeechError('Network error. Retrying...');
         }
@@ -496,8 +499,12 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
         if (!isMountedRef.current || !isListeningRef.current) return;
 
         try {
-          recognition.start();
-          setSpeechError(null);
+          const currentState = recognition.state;
+          // Only start if not already starting or listening
+          if (currentState !== 'starting' && currentState !== 'listening') {
+            recognition.start();
+            setSpeechError(null);
+          }
         } catch (error) {
           if (error.name !== 'InvalidStateError' && isMountedRef.current) {
             setSpeechError('Failed to restart speech recognition. Try again.');

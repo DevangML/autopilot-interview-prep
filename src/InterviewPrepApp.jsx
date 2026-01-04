@@ -400,7 +400,7 @@ function InterviewPrepApp() {
       if (typeof credential === 'object' && credential.token && credential.user) {
         await signInWithGoogleCredential(credential.idToken || credential.token, credential.token, credential.user);
       } else {
-        await signInWithGoogleCredential(credential);
+      await signInWithGoogleCredential(credential);
       }
     } catch (err) {
       setError(err.message);

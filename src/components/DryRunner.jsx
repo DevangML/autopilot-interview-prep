@@ -22,6 +22,7 @@ import html2canvas from 'html2canvas';
 import { understandVoiceCommand, getDataStructureColors } from '../services/dryRunnerAI.js';
 import { saveDryRunnerCorrection, getDryRunnerCorrections, saveDryRunNote } from '../services/dataStore.js';
 import { downloadNoteAsFile } from '../utils/noteExporter.js';
+import { smartDebug, debugNetwork, debugErrors } from '../services/debugHelper.js';
 
 // Editable Array Node with individual cell editing
 const ArrayNode = ({ data, selected }) => {
@@ -774,7 +775,7 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
       };
 
       recognition.onerror = (event) => {
-        console.error('[DryRunner] Speech recognition error:', event.error);
+        console.error('[DryRunner] Speech recognition error:', event.error, 'State:', recognitionRef.current?.state);
         
         if (event.error === 'not-allowed') {
           setSpeechError('Microphone permission denied. Please allow microphone access.');
@@ -788,31 +789,49 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
           console.log('[DryRunner] Recognition aborted');
           setIsListening(false);
         } else if (event.error === 'network') {
-          // Network error - try to recover
-          console.warn('[DryRunner] Network error, will retry...');
+          // Network error - Web Speech API can't reach Google's servers
+          // This is NOT about HTTP requests, it's about the speech recognition service
+          console.warn('[DryRunner] Web Speech API network error (connection to Google servers), will retry...');
           setSpeechError('Network error. Retrying...');
           
-          // Use ref to check current state, not stale closure
-          const shouldRetry = () => {
-            return recognitionRef.current && recognitionRef.current.state !== 'stopped';
+          // Check recognition state directly, not isListening (which may be stale)
+          const checkRecognitionState = () => {
+            if (!recognitionRef.current) return false;
+            const state = recognitionRef.current.state;
+            // Can retry if not stopped and not already starting
+            return state !== 'stopped' && state !== 'starting';
           };
           
-          // Retry after a short delay, checking current state via ref
+          // Retry after a short delay
           setTimeout(() => {
-            if (!shouldRetry()) {
-              console.log('[DryRunner] Retry skipped - recognition stopped');
+            if (!checkRecognitionState()) {
+              console.log('[DryRunner] Retry skipped - recognition state:', recognitionRef.current?.state);
+              // If recognition is stopped but we want to keep listening, restart it
+              if (isListening && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start();
+                  setSpeechError(null);
+                  console.log('[DryRunner] Restarted recognition after network error');
+                } catch (e) {
+                  if (e.name !== 'InvalidStateError' || !e.message?.includes('already started')) {
+                    console.error('[DryRunner] Restart failed:', e);
+                  }
+                }
+              }
               return;
             }
             
             try {
-              // Only stop if not already stopped
-              if (recognitionRef.current.state !== 'stopped') {
+              const currentState = recognitionRef.current.state;
+              // Only stop if actively listening (not already stopped)
+              if (currentState === 'listening' || currentState === 'starting') {
                 recognitionRef.current.stop();
               }
               
               setTimeout(() => {
-                if (!shouldRetry()) {
-                  return;
+                // Check again before starting
+                if (!checkRecognitionState() && !isListening) {
+                  return; // User stopped listening
                 }
                 
                 try {
@@ -825,20 +844,25 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
                     setSpeechError(null);
                   } else {
                     console.error('[DryRunner] Retry start failed:', e);
-                    setSpeechError('Network error. Please check your connection and try again.');
+                    // Don't show error if user stopped listening
+                    if (isListening) {
+                      setSpeechError('Network error. Please check your internet connection.');
+                    }
                   }
                 }
               }, 500);
             } catch (e) {
               console.error('[DryRunner] Retry stop failed:', e);
-              // Try to start anyway if stop failed
-              if (shouldRetry()) {
+              // Try to start anyway if we should be listening
+              if (isListening && checkRecognitionState()) {
                 try {
                   recognitionRef.current.start();
                   setSpeechError(null);
                 } catch (startError) {
                   console.error('[DryRunner] Retry start after stop error failed:', startError);
-                  setSpeechError('Network error. Please check your connection and try again.');
+                  if (isListening) {
+                    setSpeechError('Network error. Please check your internet connection.');
+                  }
                 }
               }
             }
@@ -856,28 +880,25 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
       };
 
       recognition.onend = () => {
-        // #region agent log
-        fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:822',message:'onend event fired',data:{isListening,hasRecognition:!!recognitionRef.current,recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
-        // #endregion
-        console.log('[DryRunner] Speech recognition ended');
+        console.log('[DryRunner] Speech recognition ended, state:', recognitionRef.current?.state);
+        
+        // Restart if still supposed to be listening
+        // Use a ref to check current state, not closure variable
         if (isListening) {
-          // Restart if still supposed to be listening
           // Add delay to prevent rapid restart loops
           setTimeout(() => {
-            // #region agent log
-            fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:828',message:'onend restart timeout executed',data:{isListening,hasRecognition:!!recognitionRef.current,recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
-            // #endregion
+            // Check both isListening state and recognition ref
             if (isListening && recognitionRef.current) {
               try {
-                recognitionRef.current.start();
-                // #region agent log
-                fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:831',message:'onend restart start() called',data:{recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
-                // #endregion
-                console.log('[DryRunner] Restarted recognition');
+                const currentState = recognitionRef.current.state;
+                // Only start if not already starting or listening
+                if (currentState !== 'starting' && currentState !== 'listening') {
+                  recognitionRef.current.start();
+                  console.log('[DryRunner] Restarted recognition');
+                } else {
+                  console.log('[DryRunner] Recognition already active, state:', currentState);
+                }
               } catch (e) {
-                // #region agent log
-                fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:835',message:'onend restart failed',data:{errorName:e.name,errorMessage:e.message,recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'K'})}).catch(()=>{});
-                // #endregion
                 // If error is "already started", that's fine
                 if (e.message && e.message.includes('already started')) {
                   console.log('[DryRunner] Recognition already running');
@@ -890,10 +911,6 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
                   }
                 }
               }
-            } else {
-              // #region agent log
-              fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:847',message:'onend restart skipped - state check failed',data:{isListening,hasRecognition:!!recognitionRef.current},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'L'})}).catch(()=>{});
-              // #endregion
             }
           }, 300); // Increased delay to prevent rapid restarts
         }
@@ -918,29 +935,21 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
 
   // Handle listening state changes
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:868',message:'isListening state changed',data:{isListening,hasRecognition:!!recognitionRef.current,recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'M'})}).catch(()=>{});
-    // #endregion
     if (!recognitionRef.current) return;
 
     if (isListening) {
       // Add a small delay to ensure recognition is ready
-      const startTimeout = setTimeout(() => {
-        // #region agent log
-        fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:875',message:'Starting recognition from useEffect',data:{isListening,recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'N'})}).catch(()=>{});
-        // #endregion
+      const startTimeout = setTimeout(async () => {
         try {
           recognitionRef.current.start();
-          // #region agent log
-          fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:878',message:'useEffect start() called successfully',data:{recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'N'})}).catch(()=>{});
-          // #endregion
           console.log('[DryRunner] Started listening');
           setSpeechError(null);
         } catch (error) {
-          // #region agent log
-          fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:882',message:'useEffect start() failed',data:{errorName:error.name,errorMessage:error.message,recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'O'})}).catch(()=>{});
-          // #endregion
           console.error('[DryRunner] Failed to start:', error);
+          
+          // Get debug info when start fails
+          const debugInfo = await smartDebug(`Speech recognition start failed: ${error.message}`);
+          fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:875',message:'Start failed - debug info',data:{errorName:error.name,errorMessage:error.message,recognitionState:recognitionRef.current?.state,debugInfo:debugInfo.formatted},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'START_FAILED'})}).catch(()=>{});
           
           // Handle specific error cases
           if (error.name === 'InvalidStateError' && error.message.includes('already started')) {
@@ -948,6 +957,8 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
             console.log('[DryRunner] Already listening');
             setSpeechError(null);
           } else if (error.message && error.message.includes('network')) {
+            const networkDebug = await debugNetwork();
+            fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:886',message:'Network error on start',data:{networkDebug:networkDebug.formatted},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'NETWORK_START'})}).catch(()=>{});
             setSpeechError('Network error. Please check your internet connection.');
             setIsListening(false);
           } else {
@@ -959,20 +970,11 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
 
       return () => clearTimeout(startTimeout);
     } else {
-      // #region agent log
-      fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:900',message:'Stopping recognition from useEffect',data:{recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'P'})}).catch(()=>{});
-      // #endregion
       try {
         recognitionRef.current.stop();
-        // #region agent log
-        fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:903',message:'useEffect stop() called successfully',data:{recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'P'})}).catch(()=>{});
-        // #endregion
         console.log('[DryRunner] Stopped listening');
         setSpeechError(null);
       } catch (error) {
-        // #region agent log
-        fetch('http://127.0.0.1:7245/ingest/b54b5b6a-ac86-4e65-b689-cc2f241ea495',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'DryRunner.jsx:907',message:'useEffect stop() failed',data:{errorName:error.name,errorMessage:error.message,recognitionState:recognitionRef.current?.state},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'Q'})}).catch(()=>{});
-        // #endregion
         // Ignore errors when stopping (might already be stopped)
         console.log('[DryRunner] Stop called (may already be stopped)');
       }

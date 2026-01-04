@@ -96,6 +96,10 @@ export const captureConsoleLogs = () => {
   };
 };
 
+// Store captured logs
+let capturedLogs = [];
+let errorListeners = [];
+
 /**
  * Get console logs from performance API and error events
  */
@@ -104,53 +108,91 @@ export const getConsoleLogs = async (filter = 'all', limit = 100) => {
     return { logs: [], error: 'Not in browser context' };
   }
 
-  const logs = [];
-  
-  // Capture uncaught errors
-  window.addEventListener('error', (event) => {
-    logs.push({
-      type: 'error',
-      message: event.message,
-      filename: event.filename,
-      lineno: event.lineno,
-      colno: event.colno,
-      stack: event.error?.stack,
+  // Capture console logs by overriding console methods
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalInfo = console.info;
+
+  // Override console methods to capture logs
+  console.log = (...args) => {
+    capturedLogs.push({
+      type: 'log',
+      message: args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '),
       timestamp: new Date().toISOString()
     });
-  });
+    originalLog.apply(console, args);
+  };
 
-  // Capture unhandled promise rejections
-  window.addEventListener('unhandledrejection', (event) => {
-    logs.push({
+  console.error = (...args) => {
+    const error = args.find(arg => arg instanceof Error);
+    capturedLogs.push({
       type: 'error',
-      message: `Unhandled Promise Rejection: ${event.reason}`,
-      stack: event.reason?.stack,
+      message: args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '),
+      stack: error?.stack,
       timestamp: new Date().toISOString()
     });
-  });
+    originalError.apply(console, args);
+  };
 
-  // Get logs from console (if available via DevTools)
-  try {
-    // Try to access console history if available
-    if (window.console._logs) {
-      logs.push(...window.console._logs);
-    }
-  } catch (e) {
-    // Console history not available
+  console.warn = (...args) => {
+    capturedLogs.push({
+      type: 'warning',
+      message: args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '),
+      timestamp: new Date().toISOString()
+    });
+    originalWarn.apply(console, args);
+  };
+
+  console.info = (...args) => {
+    capturedLogs.push({
+      type: 'info',
+      message: args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '),
+      timestamp: new Date().toISOString()
+    });
+    originalInfo.apply(console, args);
+  };
+
+  // Capture uncaught errors (only add listener once)
+  if (errorListeners.length === 0) {
+    const errorHandler = (event) => {
+      capturedLogs.push({
+        type: 'error',
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        stack: event.error?.stack,
+        timestamp: new Date().toISOString()
+      });
+    };
+
+    const rejectionHandler = (event) => {
+      capturedLogs.push({
+        type: 'error',
+        message: `Unhandled Promise Rejection: ${event.reason}`,
+        stack: event.reason?.stack,
+        timestamp: new Date().toISOString()
+      });
+    };
+
+    window.addEventListener('error', errorHandler);
+    window.addEventListener('unhandledrejection', rejectionHandler);
+    errorListeners.push({ error: errorHandler, rejection: rejectionHandler });
   }
 
   // Filter logs
-  let filteredLogs = logs;
+  let filteredLogs = capturedLogs;
   if (filter !== 'all') {
-    filteredLogs = logs.filter(log => log.type === filter);
+    filteredLogs = capturedLogs.filter(log => log.type === filter);
   }
 
-  // Limit results
+  // Limit results (keep most recent)
   filteredLogs = filteredLogs.slice(-limit);
 
   return {
     logs: filteredLogs,
-    total: logs.length,
+    total: capturedLogs.length,
     filtered: filteredLogs.length
   };
 };
@@ -164,16 +206,28 @@ export const getNetworkRequests = async (filter = 'all', limit = 50) => {
   }
 
   const entries = performance.getEntriesByType('resource');
-  const requests = entries.map(entry => ({
-    name: entry.name,
-    type: entry.initiatorType,
-    duration: entry.duration,
-    size: entry.transferSize,
-    startTime: entry.startTime,
-    status: entry.responseStatus || null,
-    failed: entry.transferSize === 0 && entry.duration > 0,
-    slow: entry.duration > 1000
-  }));
+  const requests = entries.map(entry => {
+    const status = entry.responseStatus || null;
+    const transferSize = entry.transferSize || 0;
+    // A request is only failed if:
+    // 1. Status is 4xx or 5xx, OR
+    // 2. Status is null AND transferSize is 0 AND duration > 0 (actual failure)
+    // Note: 204 No Content responses have 0 size but are successful
+    const isFailed = status 
+      ? (status >= 400 && status < 600)
+      : (transferSize === 0 && entry.duration > 0 && entry.duration < 100); // Very short duration with 0 size = likely failed
+    
+    return {
+      name: entry.name,
+      type: entry.initiatorType,
+      duration: entry.duration,
+      size: transferSize,
+      startTime: entry.startTime,
+      status: status,
+      failed: isFailed,
+      slow: entry.duration > 1000
+    };
+  });
 
   // Filter requests
   let filteredRequests = requests;
