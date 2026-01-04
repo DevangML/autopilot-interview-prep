@@ -2,7 +2,7 @@
  * Interview Prep Platform App (Local DB + Google Auth)
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { BrainCircuit, BarChart3, List, LogOut, RefreshCcw, Settings, ShieldAlert, X, CheckCircle, Clock, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { useSession } from './hooks/useSession.js';
 import { useAuth } from './hooks/useAuth.js';
@@ -16,6 +16,10 @@ import { ProgressView } from './components/ProgressView.jsx';
 import { DetailsView } from './components/DetailsView.jsx';
 import { DeepImproveChat } from './components/DeepImproveChat.jsx';
 import { QuestionDetector } from './components/QuestionDetector.jsx';
+// Lazy load DryRunner to reduce initial bundle size (React Flow is large)
+const DryRunner = lazy(() => import('./components/DryRunner.jsx').then(module => ({ default: module.DryRunner })));
+// Lazy load NotebookMode
+const NotebookMode = lazy(() => import('./components/NotebookMode.jsx'));
 import { orchestrateSession, orchestrateMoodSession } from './core/sessionOrchestrator.js';
 import { composeMoodSession, FOCUS_MODES } from './core/session.js';
 import { createAIService, AI_PROVIDERS } from './services/aiService.js';
@@ -67,6 +71,8 @@ function InterviewPrepApp() {
   const [showProgress, setShowProgress] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showDeepImprove, setShowDeepImprove] = useState(false);
+  const [showDryRunner, setShowDryRunner] = useState(false);
+  const [showNotebookMode, setShowNotebookMode] = useState(false);
   const [isOrchestrating, setIsOrchestrating] = useState(false);
   const [error, setError] = useState(null);
   const [databases, setDatabases] = useState([]);
@@ -412,8 +418,8 @@ function InterviewPrepApp() {
   if (!user) {
     return (
       <div className="w-full min-h-screen bg-[#0B0F19] text-white flex items-center justify-center">
-        <div className="w-full max-w-sm p-6 rounded-2xl border border-white/10 bg-white/5">
-          <div className="flex items-center gap-3 mb-4">
+        <div className="p-6 w-full max-w-sm rounded-2xl border border-white/10 bg-white/5">
+          <div className="flex gap-3 items-center mb-4">
             <div className="flex justify-center items-center w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg shadow-blue-500/20">
               <BrainCircuit className="w-5 h-5 text-white" />
             </div>
@@ -434,8 +440,8 @@ function InterviewPrepApp() {
   if (!isAllowed) {
     return (
       <div className="w-full min-h-screen bg-[#0B0F19] text-white flex items-center justify-center">
-        <div className="w-full max-w-md p-6 rounded-2xl border border-white/10 bg-white/5">
-          <div className="flex items-center gap-3 mb-4 text-amber-400">
+        <div className="p-6 w-full max-w-md rounded-2xl border border-white/10 bg-white/5">
+          <div className="flex gap-3 items-center mb-4 text-amber-400">
             <ShieldAlert className="w-5 h-5" />
             <div>
               <h1 className="text-lg font-semibold">Access Required</h1>
@@ -448,19 +454,80 @@ function InterviewPrepApp() {
           <div className="flex gap-2 mt-4">
             <button
               onClick={() => reloadProfile()}
-              className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-sm"
+              className="flex-1 py-2.5 text-sm rounded-lg bg-white/5 hover:bg-white/10"
             >
               Retry
             </button>
             <button
               onClick={() => signOut()}
-              className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-sm"
+              className="flex-1 py-2.5 text-sm rounded-lg bg-white/5 hover:bg-white/10"
             >
               Sign out
             </button>
           </div>
         </div>
       </div>
+    );
+  }
+
+  if (showDryRunner) {
+    return (
+      <Suspense fallback={
+        <div className="w-full h-screen bg-[#0B0F19] text-white flex items-center justify-center">
+          <div className="text-sm text-gray-400">Loading Dry Runner...</div>
+        </div>
+      }>
+        <DryRunner
+          aiService={aiService}
+          onClose={() => setShowDryRunner(false)}
+          itemId={currentUnit?.item?.id}
+          domain={currentUnit?.item?.domain}
+        />
+      </Suspense>
+    );
+  }
+
+  if (showNotebookMode) {
+    return (
+      <Suspense fallback={
+        <div className="w-full h-screen bg-[#FEFEFE] flex items-center justify-center">
+          <div className="text-sm text-gray-600">Loading Notebook Mode...</div>
+        </div>
+      }>
+        <div style={{ width: '100%', height: '100vh', position: 'relative' }}>
+          <button
+            onClick={() => setShowNotebookMode(false)}
+            style={{
+              position: 'absolute',
+              top: 10,
+              left: 10,
+              zIndex: 30,
+              padding: '10px 20px',
+              background: '#4A90E2',
+              color: 'white',
+              border: 'none',
+              borderRadius: '5px',
+              cursor: 'pointer',
+              fontSize: 14,
+              fontWeight: 'bold'
+            }}
+          >
+            ← Back
+          </button>
+          <NotebookMode
+            onVoiceCommand={(cmd) => {
+              // Handle voice commands
+              console.log('Voice command:', cmd);
+            }}
+            handwritingProfile={{
+              strokeThickness: 1.0,
+              jitter: 1.0,
+              baselineWobble: 0.5,
+              pressureVariation: 0.2
+            }}
+          />
+        </div>
+      </Suspense>
     );
   }
 
@@ -542,7 +609,7 @@ function InterviewPrepApp() {
         </div>
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto px-5 py-6 min-h-0 hide-scrollbar space-y-6">
+        <div className="overflow-y-auto flex-1 px-5 py-6 space-y-6 min-h-0 hide-scrollbar">
             {profileError && (
               <div className="p-3 rounded-lg border bg-red-500/10 border-red-500/20">
                 <p className="text-sm text-red-400">{profileError}</p>
@@ -632,13 +699,13 @@ function InterviewPrepApp() {
                       <button
                         onClick={loadOllamaModels}
                         disabled={isCheckingOllama}
-                        className="px-4 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs text-gray-300 disabled:opacity-50"
+                        className="px-4 py-3 text-xs text-gray-300 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-50"
                       >
                         {isCheckingOllama ? 'Loading...' : 'Refresh'}
                       </button>
                     </div>
                     <p className="mt-1 text-xs text-gray-500">
-                      Recommended: <strong>qwen2.5:7b</strong> (best for coding/DSA). Install with: <code className="bg-white/5 px-1 rounded">ollama pull qwen2.5:7b</code>
+                      Recommended: <strong>qwen2.5:7b</strong> (best for coding/DSA). Install with: <code className="px-1 rounded bg-white/5">ollama pull qwen2.5:7b</code>
                     </p>
                   </div>
                   <div>
@@ -659,7 +726,7 @@ function InterviewPrepApp() {
                         }
                       }}
                       disabled={isStoppingOllama}
-                      className="w-full px-4 py-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded-xl text-sm text-red-300 font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      className="px-4 py-3 w-full text-sm font-medium text-red-300 rounded-xl border transition-colors bg-red-500/20 hover:bg-red-500/30 border-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isStoppingOllama ? '🛑 Stopping All Models...' : '🛑 Stop All Ollama Models'}
                     </button>
@@ -672,7 +739,7 @@ function InterviewPrepApp() {
             </div>
 
             <div className="p-4 rounded-xl border bg-white/5 border-white/10">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex justify-between items-center mb-2">
                 <div>
                   <div className="text-xs font-semibold text-gray-400 uppercase">Imported data</div>
                   <div className="text-sm text-gray-200">
@@ -682,21 +749,21 @@ function InterviewPrepApp() {
                 <button
                   onClick={refreshDatabases}
                   disabled={isLoadingData}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300"
+                  className="flex gap-2 items-center px-3 py-2 text-xs text-gray-300 rounded-lg bg-white/5 hover:bg-white/10"
                 >
                   <RefreshCcw className="w-3 h-3" />
                   {isLoadingData ? 'Refreshing...' : 'Refresh'}
                 </button>
               </div>
               {hasPendingSchemas && (
-                <div className="mt-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
-                  <div className="text-xs text-amber-300 font-semibold uppercase mb-1">Schema confirmation</div>
+                <div className="p-3 mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
+                  <div className="mb-1 text-xs font-semibold text-amber-300 uppercase">Schema confirmation</div>
                   <div className="text-sm text-amber-100">
                     {pendingSchemas.length} database{pendingSchemas.length !== 1 ? 's' : ''} need confirmation.
                   </div>
                   {pendingSchemas.length > 0 && (
                     <div className="mt-3 text-xs text-amber-100">
-                      <div className="font-semibold text-amber-200 mb-1">
+                      <div className="mb-1 font-semibold text-amber-200">
                         {pendingSchemas[pendingSchemaIndex]?.title}
                       </div>
                       {(() => {
@@ -724,11 +791,11 @@ function InterviewPrepApp() {
                           </div>
                         );
                       })()}
-                      <div className="mt-3 flex gap-2">
+                      <div className="flex gap-2 mt-3">
                         {pendingSchemas.length > 1 && (
                           <button
                             onClick={() => setPendingSchemaIndex((prev) => Math.max(0, prev - 1))}
-                            className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-amber-100"
+                            className="flex-1 py-2 text-xs text-amber-100 rounded-lg bg-white/10"
                           >
                             Previous
                           </button>
@@ -736,7 +803,7 @@ function InterviewPrepApp() {
                         {pendingSchemas.length > 1 && (
                           <button
                             onClick={() => setPendingSchemaIndex((prev) => Math.min(pendingSchemas.length - 1, prev + 1))}
-                            className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-amber-100"
+                            className="flex-1 py-2 text-xs text-amber-100 rounded-lg bg-white/10"
                           >
                             Next
                           </button>
@@ -754,7 +821,7 @@ function InterviewPrepApp() {
                             setError(err.message);
                           }
                         }}
-                        className="mt-3 w-full py-2 rounded-lg bg-amber-500/30 border border-amber-500/40 text-xs font-semibold text-amber-50"
+                        className="py-2 mt-3 w-full text-xs font-semibold text-amber-50 rounded-lg border bg-amber-500/30 border-amber-500/40"
                       >
                         Confirm schema for this database
                       </button>
@@ -768,7 +835,7 @@ function InterviewPrepApp() {
                     {unknownDatabases.length} databases need a domain selection.
                   </div>
                   {unknownDatabases.length > 0 && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex gap-2 items-center">
                       <div className="flex-1 text-xs text-gray-300">
                         {unknownDatabases[unknownIndex]?.title}
                       </div>
@@ -776,7 +843,7 @@ function InterviewPrepApp() {
                         value={domainDraft}
                         onChange={(event) => setDomainDraft(event.target.value)}
                         placeholder="Type a domain..."
-                        className="bg-white/10 border border-white/10 text-xs text-gray-200 rounded-lg px-2 py-1 w-40"
+                        className="px-2 py-1 w-40 text-xs text-gray-200 rounded-lg border bg-white/10 border-white/10"
                       />
                     </div>
                   )}
@@ -789,7 +856,7 @@ function InterviewPrepApp() {
                           <button
                             key={domain}
                             onClick={() => setDomainDraft(domain)}
-                            className="px-2 py-1 rounded-lg bg-white/10 text-xs text-gray-200"
+                            className="px-2 py-1 text-xs text-gray-200 rounded-lg bg-white/10"
                           >
                             {domain}
                           </button>
@@ -816,7 +883,7 @@ function InterviewPrepApp() {
                           .catch(err => setError(err.message));
                       }}
                       disabled={!domainDraft.trim()}
-                      className="w-full py-2 rounded-lg bg-white/10 text-xs text-gray-200 disabled:opacity-50"
+                      className="py-2 w-full text-xs text-gray-200 rounded-lg bg-white/10 disabled:opacity-50"
                     >
                       Apply domain
                     </button>
@@ -825,13 +892,13 @@ function InterviewPrepApp() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => setUnknownIndex((prev) => Math.max(0, prev - 1))}
-                        className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-gray-300"
+                        className="flex-1 py-2 text-xs text-gray-300 rounded-lg bg-white/10"
                       >
                         Previous
                       </button>
                       <button
                         onClick={() => setUnknownIndex((prev) => Math.min(unknownDatabases.length - 1, prev + 1))}
-                        className="flex-1 py-2 rounded-lg bg-white/10 text-xs text-gray-300"
+                        className="flex-1 py-2 text-xs text-gray-300 rounded-lg bg-white/10"
                       >
                         Next
                       </button>
@@ -842,14 +909,14 @@ function InterviewPrepApp() {
             </div>
 
             <div className="p-4 rounded-xl border bg-blue-500/10 border-blue-500/20">
-              <div className="text-xs font-semibold text-blue-400 mb-2 uppercase">CSV Import</div>
+              <div className="mb-2 text-xs font-semibold text-blue-400 uppercase">CSV Import</div>
               <p className="text-sm text-gray-300">
                 Drop CSV exports into <code className="text-blue-300">data/</code> and import them here:
               </p>
               <button
                 onClick={handleImportCsvs}
                 disabled={isImporting}
-                className="mt-3 w-full py-2 text-xs font-semibold text-blue-100 rounded-lg border border-blue-500/40 bg-blue-500/20 hover:bg-blue-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="py-2 mt-3 w-full text-xs font-semibold text-blue-100 rounded-lg border border-blue-500/40 bg-blue-500/20 hover:bg-blue-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isImporting ? 'Importing CSVs...' : 'Import CSVs from data/'}
               </button>
@@ -859,10 +926,10 @@ function InterviewPrepApp() {
             </div>
 
             <div className="p-4 rounded-xl border bg-white/5 border-white/10">
-              <div className="text-xs font-semibold text-gray-400 mb-3 uppercase tracking-wider">
+              <div className="mb-3 text-xs font-semibold tracking-wider text-gray-400 uppercase">
                 Reset Progress
               </div>
-              <div className="text-sm text-gray-300 mb-3">
+              <div className="mb-3 text-sm text-gray-300">
                 Reset completion status for all items in a domain. Attempts will remain unchanged.
               </div>
               <select
@@ -894,7 +961,7 @@ function InterviewPrepApp() {
                     setError(err.message);
                   }
                 }}
-                className="w-full py-2.5 text-sm font-medium text-red-300 rounded-lg border bg-red-500/10 hover:bg-red-500/20 border-red-500/30"
+                className="py-2.5 w-full text-sm font-medium text-red-300 rounded-lg border bg-red-500/10 hover:bg-red-500/20 border-red-500/30"
               >
                 Reset Domain Progress
               </button>
@@ -906,7 +973,7 @@ function InterviewPrepApp() {
           <div className="flex gap-2">
             <button
               onClick={() => signOut()}
-              className="flex-1 py-3.5 font-semibold text-gray-300 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center gap-2"
+              className="flex flex-1 gap-2 justify-center items-center py-3.5 font-semibold text-gray-300 rounded-xl bg-white/5 hover:bg-white/10"
             >
               <LogOut className="w-4 h-4" />
               Sign out
@@ -974,7 +1041,7 @@ function InterviewPrepApp() {
           display: none;
         }
       `}</style>
-      <div className="flex relative z-10 flex-col px-5 py-6 flex-1 min-h-0">
+      <div className="flex relative z-10 flex-col flex-1 px-5 py-6 min-h-0">
         <header className="flex justify-between items-center mb-6">
           <div className="flex gap-3 items-center">
             <div className="flex justify-center items-center w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg shadow-blue-500/20">
@@ -1004,6 +1071,22 @@ function InterviewPrepApp() {
               title="Deep Improve - Analyze domain data quality"
             >
               <Sparkles className="w-5 h-5 text-gray-500 hover:text-purple-400" />
+            </button>
+            <button
+              onClick={() => setShowDryRunner(true)}
+              className="p-2.5 rounded-lg hover:bg-white/5"
+              title="Dry Runner - Voice-controlled DSA visualization"
+            >
+              <BrainCircuit className="w-5 h-5 text-gray-500 hover:text-green-400" />
+            </button>
+            <button
+              onClick={() => setShowNotebookMode(true)}
+              className="p-2.5 rounded-lg hover:bg-white/5"
+              title="Notebook Mode - Hand-drawn notebook-style visualization"
+            >
+              <svg className="w-5 h-5 text-gray-500 hover:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              </svg>
             </button>
             <button
               onClick={() => setShowSettings(true)}
@@ -1040,8 +1123,8 @@ function InterviewPrepApp() {
               <div className="p-4 rounded-xl border bg-white/5 border-white/10">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-xs font-semibold text-gray-400 uppercase">Session Progress</span>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                  <div className="flex gap-3 items-center">
+                    <span className="px-2 py-0.5 text-xs text-blue-300 rounded bg-blue-500/20">
                       {session.focusMode === 'dsa-heavy' ? 'DSA-Heavy' :
                        session.focusMode === 'interview-heavy' ? 'Interview-Heavy' :
                        session.focusMode === 'custom' ? 'Custom' :
@@ -1071,8 +1154,8 @@ function InterviewPrepApp() {
               {/* Unit View with Navigation */}
               {viewUnit && (
                 <div className="p-4 rounded-xl border bg-white/5 border-white/10">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="flex gap-3 items-center">
                       <button
                         onClick={(e) => {
                           e.preventDefault();
@@ -1084,14 +1167,14 @@ function InterviewPrepApp() {
                         disabled={!canGoPrev}
                         className={`p-2 rounded-lg transition-colors relative z-10 ${
                           canGoPrev
-                            ? 'bg-white/5 hover:bg-white/10 text-white cursor-pointer'
-                            : 'bg-white/5 opacity-30 cursor-not-allowed text-gray-500'
+                            ? 'text-white cursor-pointer bg-white/5 hover:bg-white/10'
+                            : 'text-gray-500 opacity-30 cursor-not-allowed bg-white/5'
                         }`}
                         type="button"
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
-                      <div className="flex items-center gap-2">
+                      <div className="flex gap-2 items-center">
                         <span className="text-xs font-semibold text-gray-400 uppercase">
                           Unit {viewUnitIndex + 1} of {session.units.length}
                         </span>
@@ -1110,10 +1193,10 @@ function InterviewPrepApp() {
                           <CheckCircle className="w-4 h-4 text-emerald-400" />
                         )}
                         {viewUnitIndex === session.currentUnitIndex && (
-                          <span className="text-xs text-blue-400 font-medium">Active</span>
+                          <span className="text-xs font-medium text-blue-400">Active</span>
                         )}
                         {viewUnitIndex > session.currentUnitIndex && (
-                          <span className="text-xs text-gray-500 font-medium">Preview</span>
+                          <span className="text-xs font-medium text-gray-500">Preview</span>
                         )}
                       </div>
                       <button
@@ -1127,8 +1210,8 @@ function InterviewPrepApp() {
                         disabled={!canGoNext}
                         className={`p-2 rounded-lg transition-colors relative z-10 ${
                           canGoNext
-                            ? 'bg-white/5 hover:bg-white/10 text-white cursor-pointer'
-                            : 'bg-white/5 opacity-30 cursor-not-allowed text-gray-500'
+                            ? 'text-white cursor-pointer bg-white/5 hover:bg-white/10'
+                            : 'text-gray-500 opacity-30 cursor-not-allowed bg-white/5'
                         }`}
                         type="button"
                       >
@@ -1136,13 +1219,13 @@ function InterviewPrepApp() {
                       </button>
                     </div>
                     {viewUnit.timeMinutes !== null && viewUnit.timeMinutes !== undefined && (
-                      <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <div className="flex gap-2 items-center text-xs text-gray-400">
                         <Clock className="w-3 h-3" />
                         <span>{viewUnit.timeMinutes} min</span>
                       </div>
                     )}
                     {session.isUntimed && (
-                      <div className="flex items-center gap-2 text-xs text-purple-400">
+                      <div className="flex gap-2 items-center text-xs text-purple-400">
                         <span>⏱️ Untimed Mode</span>
                       </div>
                     )}
@@ -1153,22 +1236,22 @@ function InterviewPrepApp() {
                       <div>
                         <div className="text-base font-semibold text-white">{viewUnit.item.name || viewUnit.item.title}</div>
                         {viewUnit.item.domain && (
-                          <div className="text-xs text-gray-400 mt-1">Domain: {viewUnit.item.domain}</div>
+                          <div className="mt-1 text-xs text-gray-400">Domain: {viewUnit.item.domain}</div>
                         )}
                         {viewUnit.rationale && (
-                          <div className="text-xs text-gray-500 mt-1">{viewUnit.rationale}</div>
+                          <div className="mt-1 text-xs text-gray-500">{viewUnit.rationale}</div>
                         )}
                       </div>
                       
                       {viewUnitIndex < session.currentUnitIndex && viewUnit.output && (
-                        <div className="p-3 bg-white/5 rounded-lg">
-                          <div className="text-xs text-gray-400 mb-2">Your Answer:</div>
+                        <div className="p-3 rounded-lg bg-white/5">
+                          <div className="mb-2 text-xs text-gray-400">Your Answer:</div>
                           <div className="text-sm text-gray-300 whitespace-pre-wrap">{viewUnit.output}</div>
                         </div>
                       )}
                       
                       {viewUnitIndex > session.currentUnitIndex && (
-                        <div className="p-3 bg-white/5 rounded-lg text-xs text-gray-500 italic text-center">
+                        <div className="p-3 text-xs italic text-center text-gray-500 rounded-lg bg-white/5">
                           Preview mode - Complete previous units to edit this one
                         </div>
                       )}

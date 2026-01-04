@@ -113,6 +113,29 @@ db.exec(`
     updated_at text not null default (datetime('now'))
   );
 
+  create table if not exists dry_runner_corrections (
+    id text primary key,
+    user_id text not null,
+    original_command text not null,
+    correction_command text not null,
+    context text,
+    learned_pattern text,
+    created_at text not null default (datetime('now'))
+  );
+
+  create table if not exists dry_run_notes (
+    id text primary key,
+    user_id text not null,
+    item_id text,
+    domain text,
+    title text,
+    type text not null, -- 'dry_runner' or 'notebook_mode'
+    content text not null, -- JSON: nodes, edges, strokes, steps, etc.
+    screenshot_url text,
+    created_at text not null default (datetime('now')),
+    updated_at text not null default (datetime('now'))
+  );
+
   create index if not exists idx_source_databases_user on source_databases (user_id);
   create index if not exists idx_items_user on items (user_id);
   create index if not exists idx_items_source on items (source_database_id);
@@ -123,6 +146,12 @@ db.exec(`
   create index if not exists idx_external_attempts_user on external_attempts (user_id);
   create index if not exists idx_external_attempts_domain on external_attempts (domain);
   create index if not exists idx_external_attempts_created on external_attempts (created_at);
+  create index if not exists idx_dry_runner_corrections_user on dry_runner_corrections (user_id);
+  create index if not exists idx_dry_runner_corrections_created on dry_runner_corrections (created_at);
+  create index if not exists idx_dry_run_notes_user on dry_run_notes (user_id);
+  create index if not exists idx_dry_run_notes_item on dry_run_notes (item_id);
+  create index if not exists idx_dry_run_notes_domain on dry_run_notes (domain);
+  create index if not exists idx_dry_run_notes_created on dry_run_notes (created_at);
 `);
 
 const ensureColumn = (table, column, type) => {

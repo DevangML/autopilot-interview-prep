@@ -31,6 +31,26 @@ export default defineConfig({
           }
           return 'assets/[name]-[hash].js';
         },
+        manualChunks: (id) => {
+          // Separate React Flow into its own chunk (it's large)
+          if (id.includes('reactflow') || id.includes('react-flow')) {
+            return 'reactflow';
+          }
+          // Separate React and React DOM
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+            return 'react-vendor';
+          }
+          // Other large vendor libraries
+          if (id.includes('node_modules')) {
+            if (id.includes('lucide-react')) {
+              return 'lucide';
+            }
+            if (id.includes('html2canvas')) {
+              return 'html2canvas';
+            }
+            return 'vendor';
+          }
+        },
       },
     },
   },

@@ -816,6 +816,151 @@ app.get('/ollama/status', authMiddleware, requireAllowed, async (req, res) => {
   }
 });
 
+// Dry Runner corrections endpoint
+app.post('/dry-runner/corrections', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const { originalCommand, correctionCommand, context, learnedPattern } = req.body;
+    
+    if (!originalCommand || !correctionCommand) {
+      res.status(400).json({ error: 'Missing originalCommand or correctionCommand' });
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    db.prepare(`
+      insert into dry_runner_corrections (
+        id, user_id, original_command, correction_command, context, learned_pattern
+      ) values (?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      req.user.id,
+      originalCommand,
+      correctionCommand,
+      context ? JSON.stringify(context) : null,
+      learnedPattern || null
+    );
+
+    res.json({ success: true, id });
+  } catch (error) {
+    console.error('[Dry Runner] Save correction error:', error);
+    res.status(500).json({ error: error.message || 'Failed to save correction' });
+  }
+});
+
+// Get user's dry runner corrections for learning
+app.get('/dry-runner/corrections', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const corrections = db.prepare(`
+      select id, original_command, correction_command, context, learned_pattern, created_at
+      from dry_runner_corrections
+      where user_id = ?
+      order by created_at desc
+      limit 100
+    `).all(req.user.id);
+
+    res.json(corrections.map(c => ({
+      ...c,
+      context: c.context ? JSON.parse(c.context) : null
+    })));
+  } catch (error) {
+    console.error('[Dry Runner] Get corrections error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get corrections' });
+  }
+});
+
+// Dry Run Notes endpoints
+app.post('/dry-run-notes', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const { itemId, domain, title, type, content, screenshotUrl } = req.body;
+    
+    if (!type || !content) {
+      res.status(400).json({ error: 'Missing type or content' });
+      return;
+    }
+
+    if (type !== 'dry_runner' && type !== 'notebook_mode') {
+      res.status(400).json({ error: 'Invalid type. Must be dry_runner or notebook_mode' });
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    db.prepare(`
+      insert into dry_run_notes (
+        id, user_id, item_id, domain, title, type, content, screenshot_url
+      ) values (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      req.user.id,
+      itemId || null,
+      domain || null,
+      title || null,
+      type,
+      JSON.stringify(content),
+      screenshotUrl || null
+    );
+
+    res.json({ success: true, id });
+  } catch (error) {
+    console.error('[Dry Run Notes] Save error:', error);
+    res.status(500).json({ error: error.message || 'Failed to save note' });
+  }
+});
+
+app.get('/dry-run-notes', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const { itemId, domain, type } = req.query;
+    
+    let query = 'select id, item_id, domain, title, type, content, screenshot_url, created_at, updated_at from dry_run_notes where user_id = ?';
+    const params = [req.user.id];
+    
+    if (itemId) {
+      query += ' and item_id = ?';
+      params.push(itemId);
+    }
+    if (domain) {
+      query += ' and domain = ?';
+      params.push(domain);
+    }
+    if (type) {
+      query += ' and type = ?';
+      params.push(type);
+    }
+    
+    query += ' order by created_at desc';
+    
+    const notes = db.prepare(query).all(...params);
+
+    res.json(notes.map(note => ({
+      ...note,
+      content: JSON.parse(note.content)
+    })));
+  } catch (error) {
+    console.error('[Dry Run Notes] Get error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get notes' });
+  }
+});
+
+app.delete('/dry-run-notes/:id', authMiddleware, requireAllowed, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = db.prepare(`
+      delete from dry_run_notes
+      where id = ? and user_id = ?
+    `).run(id, req.user.id);
+
+    if (result.changes === 0) {
+      res.status(404).json({ error: 'Note not found' });
+      return;
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Dry Run Notes] Delete error:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete note' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Local API running at http://localhost:${PORT}`);
   console.log(`[Server] Available routes:`);

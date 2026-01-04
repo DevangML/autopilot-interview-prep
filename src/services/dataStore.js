@@ -213,3 +213,36 @@ export const checkItemExists = async (url) => {
     return null;
   }
 };
+
+export const saveDryRunnerCorrection = async (correctionData) => {
+  return apiFetch('/dry-runner/corrections', {
+    method: 'POST',
+    body: JSON.stringify(correctionData)
+  });
+};
+
+export const getDryRunnerCorrections = async () => {
+  return apiFetch('/dry-runner/corrections');
+};
+
+export const saveDryRunNote = async (noteData) => {
+  return apiFetch('/dry-run-notes', {
+    method: 'POST',
+    body: JSON.stringify(noteData)
+  });
+};
+
+export const getDryRunNotes = async (filters = {}) => {
+  const params = new URLSearchParams();
+  if (filters.itemId) params.append('itemId', filters.itemId);
+  if (filters.domain) params.append('domain', filters.domain);
+  if (filters.type) params.append('type', filters.type);
+  
+  return apiFetch(`/dry-run-notes?${params.toString()}`);
+};
+
+export const deleteDryRunNote = async (noteId) => {
+  return apiFetch(`/dry-run-notes/${noteId}`, {
+    method: 'DELETE'
+  });
+};
