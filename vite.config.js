@@ -40,6 +40,14 @@ export default defineConfig({
           if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
             return 'react-vendor';
           }
+          // Vosk speech recognition (large, loaded on demand)
+          if (id.includes('vosk-browser') || id.includes('onnxruntime')) {
+            return 'vosk-speech';
+          }
+          // Transformers.js / Whisper (alternative, also large)
+          if (id.includes('@xenova/transformers')) {
+            return 'whisper-speech';
+          }
           // Other large vendor libraries
           if (id.includes('node_modules')) {
             if (id.includes('lucide-react')) {

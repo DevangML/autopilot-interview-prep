@@ -23,7 +23,7 @@ import { understandVoiceCommand, getDataStructureColors } from '../services/dryR
 import { saveDryRunnerCorrection, getDryRunnerCorrections, saveDryRunNote } from '../services/dataStore.js';
 import { downloadNoteAsFile } from '../utils/noteExporter.js';
 import { smartDebug, debugNetwork, debugErrors } from '../services/debugHelper.js';
-import { useWhisperSpeech, WHISPER_MODELS } from '../hooks/useWhisperSpeech.js';
+import { useVoskSpeech } from '../hooks/useVoskSpeech.js';
 
 // Editable Array Node with individual cell editing
 const ArrayNode = ({ data, selected }) => {
@@ -702,27 +702,33 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
   const flowRef = useRef(null);
   const processVoiceCommandRef = useRef(null);
 
-  // Local Whisper-based speech recognition (100% offline, free)
+  // Local Vosk REAL-TIME speech recognition (100% offline, free)
+  // Processes commands WHILE you speak, not after silence
   const {
     isListening,
     isLoading: isModelLoading,
     isReady: isModelReady,
     transcript,
+    partialTranscript,
     error: speechError,
     loadingProgress,
     status: speechStatus,
-    initialize: initializeWhisper,
-    toggleListening: toggleWhisperListening,
+    toggleListening: toggleVoskListening,
     startListening,
     stopListening,
-  } = useWhisperSpeech({
-    modelId: WHISPER_MODELS.TINY_EN, // Fastest, ~40MB
-    continuous: true,
-    silenceDuration: 1500,
-    onTranscript: (text) => {
-      if (text.trim() && processVoiceCommandRef.current) {
-        console.log('[DryRunner] Processing Whisper transcript:', text);
-        processVoiceCommandRef.current(text.trim());
+  } = useVoskSpeech({
+    processPartials: true, // Process commands in real-time while speaking
+    onPartialTranscript: (fullText, newWords) => {
+      // Called in real-time as you speak with new words detected
+      if (newWords && processVoiceCommandRef.current) {
+        console.log('[DryRunner] Real-time command:', newWords);
+        processVoiceCommandRef.current(newWords);
+      }
+    },
+    onFinalTranscript: (text) => {
+      // Called after pause - can be used for confirmation or correction
+      if (text.trim()) {
+        console.log('[DryRunner] Final transcript:', text);
       }
     },
   });
@@ -879,9 +885,9 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
     }
   };
 
-  // Toggle Whisper-based speech recognition
+  // Toggle Vosk real-time speech recognition
   const toggleListening = async () => {
-    await toggleWhisperListening();
+    await toggleVoskListening();
   };
 
   const handleScreenshot = async () => {
@@ -1078,11 +1084,21 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
         </div>
       )}
 
-      {/* Transcript Display */}
-      {transcript && (
+      {/* Real-time Transcript Display */}
+      {(partialTranscript || transcript) && (
         <div className="px-4 py-2 bg-white/5 border-b border-white/10">
           <div className="text-sm text-gray-300">
-            <span className="text-gray-500">You said:</span> {transcript}
+            {partialTranscript ? (
+              <>
+                <span className="text-green-400 animate-pulse">●</span>
+                <span className="text-gray-500 ml-2">Listening:</span>{' '}
+                <span className="text-green-300">{partialTranscript}</span>
+              </>
+            ) : (
+              <>
+                <span className="text-gray-500">Processed:</span> {transcript}
+              </>
+            )}
           </div>
         </div>
       )}

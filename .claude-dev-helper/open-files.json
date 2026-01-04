@@ -1,41 +1,5 @@
 [
   {
-    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/services/whisperWorker.js",
-    "timestamp": 1767512548917,
-    "focus": false,
-    "openLocation": 0
-  },
-  {
-    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/services/whisperSpeechRecognition.js",
-    "timestamp": 1767512605291,
-    "focus": false,
-    "openLocation": 0
-  },
-  {
-    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/hooks/useWhisperSpeech.js",
-    "timestamp": 1767512633543,
-    "focus": false,
-    "openLocation": 0
-  },
-  {
-    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
-    "timestamp": 1767512679609,
-    "focus": false,
-    "openLocation": 0
-  },
-  {
-    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
-    "timestamp": 1767512703409,
-    "focus": false,
-    "openLocation": 0
-  },
-  {
-    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
-    "timestamp": 1767512845378,
-    "focus": false,
-    "openLocation": 0
-  },
-  {
     "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
     "timestamp": 1767512865200,
     "focus": false,
@@ -50,6 +14,48 @@
   {
     "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
     "timestamp": 1767512909579,
+    "focus": false,
+    "openLocation": 0
+  },
+  {
+    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/services/voskSpeechRecognition.js",
+    "timestamp": 1767513656486,
+    "focus": false,
+    "openLocation": 0
+  },
+  {
+    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/hooks/useVoskSpeech.js",
+    "timestamp": 1767513687050,
+    "focus": false,
+    "openLocation": 0
+  },
+  {
+    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
+    "timestamp": 1767513704136,
+    "focus": false,
+    "openLocation": 0
+  },
+  {
+    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
+    "timestamp": 1767513719875,
+    "focus": false,
+    "openLocation": 0
+  },
+  {
+    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
+    "timestamp": 1767513726797,
+    "focus": false,
+    "openLocation": 0
+  },
+  {
+    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/src/components/DryRunner.jsx",
+    "timestamp": 1767513744108,
+    "focus": false,
+    "openLocation": 0
+  },
+  {
+    "filePath": "/Users/devang/Desktop/saas/custom/dsa_helper_extension/vite.config.js",
+    "timestamp": 1767513770314,
     "focus": false,
     "openLocation": 0
   }
