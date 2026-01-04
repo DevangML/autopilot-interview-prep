@@ -7,6 +7,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import path from 'path';
+import fs from 'fs';
 import { execFile } from 'child_process';
 import { db, updateTimestamp } from './db.js';
 import { ensureOllamaRunning, stopOllama, getOllamaStatus, isOllamaRunning } from './ollamaManager.js';
@@ -871,8 +872,8 @@ app.get('/dry-runner/corrections', authMiddleware, requireAllowed, async (req, r
 // Dry Run Notes endpoints
 app.post('/dry-run-notes', authMiddleware, requireAllowed, async (req, res) => {
   try {
-    const { itemId, domain, title, type, content, screenshotUrl } = req.body;
-    
+    const { itemId, domain, title, type, content, screenshotUrl, noteName } = req.body;
+
     if (!type || !content) {
       res.status(400).json({ error: 'Missing type or content' });
       return;
@@ -884,6 +885,14 @@ app.post('/dry-run-notes', authMiddleware, requireAllowed, async (req, res) => {
     }
 
     const id = crypto.randomUUID();
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+    const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS
+
+    // Generate filename from noteName or title
+    const baseName = (noteName || title || type).replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 50);
+    const fileName = `${baseName}_${dateStr}_${timeStr}.json`;
+
     db.prepare(`
       insert into dry_run_notes (
         id, user_id, item_id, domain, title, type, content, screenshot_url
@@ -899,7 +908,27 @@ app.post('/dry-run-notes', authMiddleware, requireAllowed, async (req, res) => {
       screenshotUrl || null
     );
 
-    res.json({ success: true, id });
+    // Save to data/notes folder
+    const notesDir = path.join(__dirname, 'data', 'notes');
+    const filePath = path.join(notesDir, fileName);
+
+    const noteData = {
+      version: '1.0',
+      id,
+      itemId: itemId || null,
+      domain: domain || null,
+      title: title || null,
+      noteName: noteName || null,
+      type,
+      content,
+      screenshotUrl: screenshotUrl || null,
+      createdAt: now.toISOString(),
+      userId: req.user.id
+    };
+
+    fs.writeFileSync(filePath, JSON.stringify(noteData, null, 2));
+
+    res.json({ success: true, id, fileName, filePath });
   } catch (error) {
     console.error('[Dry Run Notes] Save error:', error);
     res.status(500).json({ error: error.message || 'Failed to save note' });

@@ -6,7 +6,7 @@
 
 import { generateContent as geminiGenerate } from './gemini.js';
 import { generateContent as ollamaGenerate } from './ollama.js';
-import { generateWithMCP, detectSearchNeeds } from './mcpClient.js';
+// mcpClient is dynamically imported to avoid static/dynamic conflict
 
 export const AI_PROVIDERS = {
   GEMINI: 'gemini',
@@ -31,6 +31,9 @@ export const createAIService = (config) => {
       ollamaUrl,
       ollamaModel,
       generateContent: async (prompt, options = {}) => {
+        // Dynamically import mcpClient to avoid static/dynamic import conflict
+        const { detectSearchNeeds, generateWithMCP } = await import('./mcpClient.js');
+        
         // Check if web search is needed
         const { needsSearch, queries } = detectSearchNeeds(prompt);
         

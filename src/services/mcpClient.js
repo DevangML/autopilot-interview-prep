@@ -5,6 +5,9 @@
  * Based on: https://www.tva.sg/building-a-local-ai-assistant-with-web-search-mcp-ollama-setup/
  */
 
+// Static import to avoid dynamic/static conflict
+import { generateContent } from './ollama.js';
+
 /**
  * MCP Tool Definition
  */
@@ -207,7 +210,6 @@ export const generateWithMCP = async (ollamaUrl, ollamaModel, prompt, options = 
   
   // Call Ollama with enhanced prompt
   // Note: This will automatically wake up Ollama if needed (handled in ollama.js)
-  const { generateContent } = await import('./ollama.js');
   return await generateContent(ollamaUrl, ollamaModel, enhancedPrompt, options);
 };
 

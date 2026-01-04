@@ -11,6 +11,7 @@ export default defineConfig({
   server: {},
   build: {
     target: 'es2020',
+    chunkSizeWarningLimit: 1000, // Increase limit since vosk-speech is intentionally large
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
@@ -48,6 +49,14 @@ export default defineConfig({
           if (id.includes('@xenova/transformers')) {
             return 'whisper-speech';
           }
+          // Separate Ollama and MCP services into their own chunk (for better code splitting)
+          if (id.includes('services/ollama.js') || id.includes('services/mcpClient.js')) {
+            return 'ollama-services';
+          }
+          // Enhanced features services (can be lazy loaded)
+          if (id.includes('services/enhanced') || id.includes('services/performanceLogger')) {
+            return 'enhanced-features';
+          }
           // Other large vendor libraries
           if (id.includes('node_modules')) {
             if (id.includes('lucide-react')) {
@@ -55,6 +64,9 @@ export default defineConfig({
             }
             if (id.includes('html2canvas')) {
               return 'html2canvas';
+            }
+            if (id.includes('pako')) {
+              return 'pako';
             }
             return 'vendor';
           }

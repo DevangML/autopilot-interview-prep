@@ -117,9 +117,9 @@ export class IndexedDBManager {
     const transaction = this.db.transaction(['data'], 'readonly');
     const store = transaction.objectStore('data');
     
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       const request = store.get(key);
-      request.onsuccess = () => {
+      request.onsuccess = async () => {
         const entry = request.result;
         
         if (!entry) {
@@ -179,25 +179,28 @@ export class IndexedDBManager {
     const store = transaction.objectStore('data');
     const index = store.index('category');
     
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       const request = index.getAll(category);
-      request.onsuccess = () => {
-        const entries = request.result.map(entry => {
+      request.onsuccess = async () => {
+        const entries = await Promise.all(request.result.map(async (entry) => {
           if (entry.data.compressed) {
-            const compressed = new Uint8Array(entry.data.data);
-            const decompressed = pako.inflate(compressed, { to: 'string' });
-            return {
-              id: entry.id,
-              data: JSON.parse(decompressed),
-              timestamp: entry.timestamp
-            };
+            const pakoLoaded = await loadPako();
+            if (pakoLoaded && pako) {
+              const compressed = new Uint8Array(entry.data.data);
+              const decompressed = pako.inflate(compressed, { to: 'string' });
+              return {
+                id: entry.id,
+                data: JSON.parse(decompressed),
+                timestamp: entry.timestamp
+              };
+            }
           }
           return {
             id: entry.id,
             data: entry.data,
             timestamp: entry.timestamp
           };
-        });
+        }));
         resolve(entries);
       };
       request.onerror = () => reject(request.error);

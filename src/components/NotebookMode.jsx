@@ -19,11 +19,10 @@ import { GestureRecognizer } from '../core/gestureRecognizer.js';
 import { StepEngine } from '../core/stepEngine.js';
 import { VoiceCommandParser } from '../core/voiceCommandParser.js';
 import { notebookNodeTypes } from './NotebookNodes.jsx';
-import { Mic, MicOff, Save } from 'lucide-react';
+import { Mic, MicOff, Save, Loader2, Edit3 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveDryRunNote } from '../services/dataStore.js';
-import { downloadNoteAsFile } from '../utils/noteExporter.js';
-import { smartDebug, debugNetwork, debugErrors } from '../services/debugHelper.js';
+import { useVoskSpeech } from '../hooks/useVoskSpeech.js';
 
 const PaperMode = {
   RULED: 'ruled',
@@ -36,11 +35,10 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [paperMode, setPaperMode] = useState(PaperMode.RULED);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [isListening, setIsListening] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [speechError, setSpeechError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
-  
+  const [noteName, setNoteName] = useState('');
+  const [showNameInput, setShowNameInput] = useState(false);
+
   const canvasRef = useRef(null);
   const sketchCanvasRef = useRef(null);
   const pencilActorRef = useRef(null);
@@ -51,13 +49,37 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
   const voiceParserRef = useRef(null);
   const strokeCacheRef = useRef(new Map());
   const isDrawingRef = useRef(false);
-  const recognitionRef = useRef(null);
-  const isListeningRef = useRef(false);
-  const networkRetryTimeoutRef = useRef(null);
   const handleVoiceCommandRef = useRef(null);
   const isMountedRef = useRef(true);
-  const scheduleNetworkRetryRef = useRef(null);
   const flowRef = useRef(null);
+
+  // Local Vosk REAL-TIME speech recognition (100% offline, free)
+  const {
+    isListening,
+    isLoading: isModelLoading,
+    transcript,
+    partialTranscript,
+    error: speechError,
+    loadingProgress,
+    toggleListening: toggleVoskListening,
+  } = useVoskSpeech({
+    processPartials: true,
+    onPartialTranscript: (fullText, newWords) => {
+      // Process commands in real-time as user speaks
+      if (newWords && voiceParserRef.current) {
+        const parsed = voiceParserRef.current.parse(newWords);
+        if (parsed) {
+          handleVoiceCommandRef.current?.(parsed);
+        }
+      }
+    },
+    onFinalTranscript: (text) => {
+      // Full command after pause - can re-process for accuracy
+      if (text.trim() && voiceParserRef.current) {
+        console.log('[NotebookMode] Final transcript:', text);
+      }
+    },
+  });
 
   // Initialize systems
   useEffect(() => {
@@ -108,9 +130,6 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
     };
   }, []);
 
-  useEffect(() => {
-    isListeningRef.current = isListening;
-  }, [isListening]);
 
   // Handle canvas resize
   useEffect(() => {
@@ -268,47 +287,6 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
     }
   }, [executeStrokeScript]);
 
-  // Handle listening state changes
-  useEffect(() => {
-    if (!recognitionRef.current) return;
-
-    if (isListening) {
-      const startTimeout = setTimeout(() => {
-        if (!recognitionRef.current || !isMountedRef.current) return;
-
-        try {
-          recognitionRef.current.start();
-          setSpeechError(null);
-        } catch (error) {
-          const message = (error?.message || error?.name || '').toLowerCase();
-          if (error?.name === 'InvalidStateError' && message.includes('already started')) {
-            setSpeechError(null);
-            return;
-          }
-
-          if (message.includes('network')) {
-            setSpeechError('Network error. Retrying...');
-            scheduleNetworkRetryRef.current?.();
-            return;
-          }
-
-          if (isMountedRef.current) {
-            setSpeechError(`Failed to start: ${error?.message || error?.name}. Try refreshing the page.`);
-            setIsListening(false);
-          }
-        }
-      }, 100);
-
-      return () => clearTimeout(startTimeout);
-    }
-
-    try {
-      recognitionRef.current.stop();
-      setSpeechError(null);
-    } catch (error) {
-      console.warn('[NotebookMode] Recognition stop failed', error);
-    }
-  }, [isListening]);
 
   /**
    * Handle voice command
@@ -365,175 +343,7 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
     handleVoiceCommandRef.current = handleVoiceCommand;
   }, [handleVoiceCommand]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setSpeechError('Speech recognition not supported in this browser. Please use Chrome, Edge, or Safari.');
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    recognition.maxAlternatives = 1;
-
-    const scheduleNetworkRetry = () => {
-      if (!isMountedRef.current) return;
-
-      if (networkRetryTimeoutRef.current) {
-        clearTimeout(networkRetryTimeoutRef.current);
-        networkRetryTimeoutRef.current = null;
-      }
-
-      networkRetryTimeoutRef.current = window.setTimeout(() => {
-        networkRetryTimeoutRef.current = null;
-        if (!isMountedRef.current || !isListeningRef.current) return;
-
-        try {
-          recognition.stop();
-        } catch (stopError) {
-          console.warn('[NotebookMode] Network retry stop failed', stopError);
-        }
-
-        setTimeout(() => {
-          if (!isMountedRef.current || !isListeningRef.current) return;
-
-          try {
-            recognition.start();
-            setSpeechError(null);
-          } catch (startError) {
-            const message = startError?.message?.toLowerCase() || '';
-            if (message.includes('network')) {
-              scheduleNetworkRetry();
-            } else if (startError?.name !== 'InvalidStateError' && isMountedRef.current) {
-              setSpeechError('Speech recognition unavailable. Try refreshing the page.');
-              setIsListening(false);
-            }
-          }
-        }, 500);
-      }, 1000);
-    };
-
-    scheduleNetworkRetryRef.current = scheduleNetworkRetry;
-
-    recognition.onstart = () => {
-      console.log('[NotebookMode] Speech recognition started');
-      if (isMountedRef.current) {
-        setSpeechError(null);
-      }
-    };
-
-    recognition.onresult = (event) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript + ' ';
-        } else {
-          interimTranscript += transcript;
-        }
-      }
-
-      const latestTranscript = interimTranscript || finalTranscript;
-      setTranscript(latestTranscript);
-
-      if (finalTranscript.trim() && voiceParserRef.current) {
-        const parsed = voiceParserRef.current.parse(finalTranscript.trim());
-        if (parsed) {
-          handleVoiceCommandRef.current?.(parsed);
-        }
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.error('[NotebookMode] Speech recognition error:', event.error, 'State:', recognitionRef.current?.state);
-
-      if (!isMountedRef.current) return;
-
-      if (event.error === 'network') {
-        // Web Speech API network error - connection to Google servers failed
-        // This is NOT about HTTP requests
-        if (isMountedRef.current) {
-          setSpeechError('Network error. Retrying...');
-        }
-        scheduleNetworkRetry();
-      } else if (event.error === 'not-allowed') {
-        setSpeechError('Microphone permission denied.');
-        if (isMountedRef.current) {
-          setIsListening(false);
-        }
-      } else if (event.error === 'audio-capture') {
-        setSpeechError('No microphone found. Please connect a microphone.');
-        if (isMountedRef.current) {
-          setIsListening(false);
-        }
-      } else if (event.error === 'service-not-allowed') {
-        setSpeechError('Speech recognition service not allowed. Please check browser settings.');
-        if (isMountedRef.current) {
-          setIsListening(false);
-        }
-      } else if (event.error === 'aborted') {
-        setSpeechError(null);
-        if (isMountedRef.current) {
-          setIsListening(false);
-        }
-      } else if (event.error === 'no-speech') {
-        setSpeechError(null);
-      } else {
-        setSpeechError(`Speech error: ${event.error}`);
-        if (isMountedRef.current) {
-          setIsListening(false);
-        }
-      }
-    };
-
-    recognition.onend = () => {
-      if (!isMountedRef.current || !isListeningRef.current) return;
-
-      setTimeout(() => {
-        if (!isMountedRef.current || !isListeningRef.current) return;
-
-        try {
-          const currentState = recognition.state;
-          // Only start if not already starting or listening
-          if (currentState !== 'starting' && currentState !== 'listening') {
-            recognition.start();
-            setSpeechError(null);
-          }
-        } catch (error) {
-          if (error.name !== 'InvalidStateError' && isMountedRef.current) {
-            setSpeechError('Failed to restart speech recognition. Try again.');
-            setIsListening(false);
-          }
-        }
-      }, 300);
-    };
-
-    recognitionRef.current = recognition;
-
-    return () => {
-      if (networkRetryTimeoutRef.current) {
-        clearTimeout(networkRetryTimeoutRef.current);
-        networkRetryTimeoutRef.current = null;
-      }
-
-      try {
-        recognition.stop();
-      } catch (stopError) {
-        // Ignore cleanup errors
-      }
-
-      if (recognitionRef.current === recognition) {
-        recognitionRef.current = null;
-      }
-      scheduleNetworkRetryRef.current = null;
-    };
-  }, []);
 
   const handleCreateAction = async (parsed) => {
     const { target, parameters } = parsed;

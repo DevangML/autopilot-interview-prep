@@ -34,6 +34,8 @@ import {
   resetDomainProgress
 } from './services/dataStore.js';
 import { DOMAINS } from './core/domains.js';
+import { initializeEnhancedFeatures, cleanupEnhancedFeatures } from './services/enhancedFeaturesIntegration.js';
+import './styles/advanced-features.css';
 
 const DOMAIN_OPTIONS = Object.values(DOMAINS).map(domain => domain.name);
 
@@ -215,6 +217,19 @@ function InterviewPrepApp() {
       setIsImporting(false);
     }
   };
+
+  // Initialize enhanced features on app startup
+  useEffect(() => {
+    initializeEnhancedFeatures().catch(err => {
+      console.error('[InterviewPrepApp] Failed to initialize enhanced features:', err);
+    });
+
+    return () => {
+      cleanupEnhancedFeatures().catch(err => {
+        console.error('[InterviewPrepApp] Failed to cleanup enhanced features:', err);
+      });
+    };
+  }, []);
 
   useEffect(() => {
     if (!user?.id || !isAllowed) return;
