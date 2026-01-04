@@ -716,6 +716,7 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
     toggleListening: toggleVoskListening,
     startListening,
     stopListening,
+    reset: resetTranscript,
   } = useVoskSpeech({
     processPartials: true, // Process commands in real-time while speaking
     onPartialTranscript: (fullText, newWords) => {
@@ -877,7 +878,8 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
         recentCommands: [...(ctx.recentCommands || []).slice(-10), command]
       }));
 
-      setTranscript('');
+      // Clear transcript after processing (optional - transcript is managed by hook)
+      // resetTranscript();
     } catch (error) {
       console.error('[DryRunner] Error processing command:', error);
     } finally {

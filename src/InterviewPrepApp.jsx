@@ -540,6 +540,7 @@ function InterviewPrepApp() {
               baselineWobble: 0.5,
               pressureVariation: 0.2
             }}
+            aiService={aiService}
           />
         </div>
       </Suspense>

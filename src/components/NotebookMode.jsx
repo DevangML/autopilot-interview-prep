@@ -18,11 +18,44 @@ import { StrokeScriptGenerator } from '../core/strokeScriptGenerator.js';
 import { GestureRecognizer } from '../core/gestureRecognizer.js';
 import { StepEngine } from '../core/stepEngine.js';
 import { VoiceCommandParser } from '../core/voiceCommandParser.js';
+import { understandVoiceCommand } from '../services/dryRunnerAI.js';
 import { notebookNodeTypes } from './NotebookNodes.jsx';
+
+/**
+ * Convert AI command format to Notebook action format
+ */
+function convertAICmdToNotebookAction(aiCmd) {
+  if (!aiCmd || !aiCmd.type) return null;
+  
+  const actionMap = {
+    'create': 'CREATE',
+    'update': 'UPDATE',
+    'delete': 'DELETE',
+    'move': 'MOVE',
+    'highlight': 'HIGHLIGHT'
+  };
+  
+  const action = actionMap[aiCmd.type.toLowerCase()];
+  if (!action) return null;
+  
+  return {
+    action,
+    target: {
+      type: 'node',
+      identifier: aiCmd.id || aiCmd.properties?.label || 'unknown'
+    },
+    parameters: {
+      type: aiCmd.shape || 'array',
+      size: aiCmd.properties?.data?.elements?.length || aiCmd.properties?.width || 5,
+      ...aiCmd.properties
+    }
+  };
+}
 import { Mic, MicOff, Save, Loader2, Edit3 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { saveDryRunNote } from '../services/dataStore.js';
 import { useVoskSpeech } from '../hooks/useVoskSpeech.js';
+import { useWhisperSpeech } from '../hooks/useWhisperSpeech.js';
 import { FileSystemHelper } from '../services/advancedWebFeatures.js';
 
 const PaperMode = {
@@ -31,7 +64,7 @@ const PaperMode = {
   BLANK: 'blank'
 };
 
-export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, itemId, domain, onClose }) {
+export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, itemId, domain, onClose, aiService }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [paperMode, setPaperMode] = useState(PaperMode.RULED);
@@ -54,33 +87,167 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
   const isMountedRef = useRef(true);
   const flowRef = useRef(null);
 
-  // Local Vosk REAL-TIME speech recognition (100% offline, free)
-  const {
-    isListening,
-    isLoading: isModelLoading,
-    transcript,
-    partialTranscript,
-    error: speechError,
-    loadingProgress,
-    toggleListening: toggleVoskListening,
-  } = useVoskSpeech({
+  // Speech recognition - try Vosk first, fallback to Whisper
+  const [useWhisperFallback, setUseWhisperFallback] = useState(false);
+  
+  // Session context for AI understanding
+  const [sessionContext, setSessionContext] = useState({
+    shapes: [],
+    variables: {},
+    recentCommands: []
+  });
+
+  // Vosk speech recognition (preferred for real-time)
+  const voskSpeech = useVoskSpeech({
     processPartials: true,
-    onPartialTranscript: (fullText, newWords) => {
-      // Process commands in real-time as user speaks
-      if (newWords && voiceParserRef.current) {
+    onPartialTranscript: async (fullText, newWords) => {
+      console.log('[NotebookMode] Partial transcript:', { fullText, newWords });
+      if (newWords && aiService) {
+        // Use AI to understand command (like DryRunner)
+        try {
+          const instructions = await understandVoiceCommand(newWords, sessionContext, aiService);
+          console.log('[NotebookMode] AI instructions:', instructions);
+          if (instructions.commands && instructions.commands.length > 0) {
+            // Convert AI commands to notebook actions
+            for (const cmd of instructions.commands) {
+              const parsed = convertAICmdToNotebookAction(cmd);
+              if (parsed) {
+                console.log('[NotebookMode] Executing AI command:', parsed.action);
+                handleVoiceCommandRef.current?.(parsed);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[NotebookMode] AI understanding failed, trying simple parser:', err);
+          // Fallback to simple parser
+          if (voiceParserRef.current) {
+            const parsed = voiceParserRef.current.parse(newWords);
+            if (parsed) {
+              handleVoiceCommandRef.current?.(parsed);
+            }
+          }
+        }
+      } else if (newWords && voiceParserRef.current) {
+        // Fallback: simple parser if no AI service
         const parsed = voiceParserRef.current.parse(newWords);
         if (parsed) {
           handleVoiceCommandRef.current?.(parsed);
         }
       }
     },
-    onFinalTranscript: (text) => {
-      // Full command after pause - can re-process for accuracy
-      if (text.trim() && voiceParserRef.current) {
-        console.log('[NotebookMode] Final transcript:', text);
+    onFinalTranscript: async (text) => {
+      console.log('[NotebookMode] Final transcript:', text);
+      if (text.trim() && aiService) {
+        try {
+          const instructions = await understandVoiceCommand(text, sessionContext, aiService);
+          if (instructions.commands && instructions.commands.length > 0) {
+            for (const cmd of instructions.commands) {
+              const parsed = convertAICmdToNotebookAction(cmd);
+              if (parsed) {
+                handleVoiceCommandRef.current?.(parsed);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[NotebookMode] AI understanding failed:', err);
+          if (voiceParserRef.current) {
+            const parsed = voiceParserRef.current.parse(text);
+            if (parsed) {
+              handleVoiceCommandRef.current?.(parsed);
+            }
+          }
+        }
       }
     },
   });
+
+  // Whisper fallback (more reliable, already working)
+  const whisperSpeech = useWhisperSpeech({
+    modelId: 'Xenova/whisper-tiny.en',
+    onTranscript: (text) => {
+      if (text.trim() && voiceParserRef.current) {
+        const parsed = voiceParserRef.current.parse(text);
+        if (parsed) {
+          handleVoiceCommandRef.current?.(parsed);
+        }
+      }
+    },
+  });
+
+  // Use Whisper if Vosk fails or user prefers it
+  const activeSpeech = useWhisperFallback ? whisperSpeech : voskSpeech;
+  
+  // Get status from active speech
+  const speechStatus = useWhisperFallback ? whisperSpeech.status : voskSpeech.status;
+  const {
+    isListening,
+    isLoading: isModelLoading,
+    isReady: isModelReady,
+    transcript,
+    partialTranscript,
+    error: speechError,
+    loadingProgress,
+    toggleListening: toggleSpeechListening,
+    initialize: initializeModel,
+  } = activeSpeech;
+
+  // Auto-initialize model when component mounts
+  useEffect(() => {
+    if (!isModelReady && !isModelLoading && !useWhisperFallback) {
+      console.log('[NotebookMode] Auto-initializing Vosk model...');
+      initializeModel().catch(err => {
+        console.error('[NotebookMode] Vosk initialization failed, switching to Whisper fallback:', err);
+        setUseWhisperFallback(true);
+      });
+    } else if (useWhisperFallback && !isModelReady && !isModelLoading) {
+      console.log('[NotebookMode] Initializing Whisper model...');
+      initializeModel().catch(err => {
+        console.error('[NotebookMode] Whisper initialization failed:', err);
+      });
+    }
+  }, [isModelReady, isModelLoading, useWhisperFallback, initializeModel]);
+
+  // Switch to Whisper if Vosk times out or fails
+  useEffect(() => {
+    if (speechError && !useWhisperFallback) {
+      const shouldFallback = 
+        speechError.includes('timeout') || 
+        speechError.includes('CORS') || 
+        speechError.includes('Failed to load') ||
+        speechError.includes('All model URLs failed') ||
+        speechError.includes('network') ||
+        speechError.includes('NetworkError');
+      
+      if (shouldFallback) {
+        console.log('[NotebookMode] Vosk error detected, switching to Whisper:', speechError);
+        setUseWhisperFallback(true);
+        // Initialize Whisper immediately after switching
+        setTimeout(() => {
+          if (whisperSpeech.initialize) {
+            whisperSpeech.initialize().catch(err => {
+              console.error('[NotebookMode] Whisper initialization failed:', err);
+            });
+          }
+        }, 100);
+      }
+    }
+  }, [speechError, useWhisperFallback, whisperSpeech]);
+  
+  // Also check status for timeout/error
+  useEffect(() => {
+    if (voskSpeech.status === 'error' && !useWhisperFallback) {
+      console.log('[NotebookMode] Vosk status error, switching to Whisper...');
+      setUseWhisperFallback(true);
+      // Initialize Whisper immediately after switching
+      setTimeout(() => {
+        if (whisperSpeech.initialize) {
+          whisperSpeech.initialize().catch(err => {
+            console.error('[NotebookMode] Whisper initialization failed:', err);
+          });
+        }
+      }, 100);
+    }
+  }, [voskSpeech.status, useWhisperFallback, whisperSpeech]);
 
   // Initialize systems
   useEffect(() => {
@@ -293,8 +460,24 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
    * Handle voice command
    */
   const handleVoiceCommand = useCallback(async (parsed) => {
-    if (!scriptGeneratorRef.current || !pencilActorRef.current || !stepEngineRef.current) return;
+    console.log('[NotebookMode] handleVoiceCommand called with:', parsed);
+    
+    if (!parsed || !parsed.action) {
+      console.warn('[NotebookMode] Invalid command:', parsed);
+      return;
+    }
+    
+    if (!scriptGeneratorRef.current || !pencilActorRef.current || !stepEngineRef.current) {
+      console.warn('[NotebookMode] Systems not initialized:', {
+        scriptGenerator: !!scriptGeneratorRef.current,
+        pencilActor: !!pencilActorRef.current,
+        stepEngine: !!stepEngineRef.current
+      });
+      return;
+    }
 
+    console.log('[NotebookMode] Executing action:', parsed.action);
+    
     // Execute based on action
     switch (parsed.action) {
         case 'CREATE':
@@ -347,7 +530,16 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
 
 
   const handleCreateAction = async (parsed) => {
+    console.log('[NotebookMode] handleCreateAction called with:', parsed);
+    
+    if (!parsed || !parsed.target || !parsed.parameters) {
+      console.error('[NotebookMode] Invalid create command:', parsed);
+      return;
+    }
+    
     const { target, parameters } = parsed;
+    console.log('[NotebookMode] Creating:', { target, parameters });
+    
     const elements = parameters.type === 'array' 
       ? new Array(parameters.size || 0).fill(null)
       : [];
@@ -363,22 +555,33 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
       }
     };
 
-    setNodes((nds) => [...nds, newNode]);
+    console.log('[NotebookMode] Adding node:', newNode);
+    setNodes((nds) => {
+      const updated = [...nds, newNode];
+      console.log('[NotebookMode] Nodes updated, count:', updated.length);
+      return updated;
+    });
     
     // Generate and execute stroke script
-    const strokeScript = scriptGeneratorRef.current.generateArrayScript(
-      { elements, label: target.identifier },
-      newNode.position
-    );
+    if (scriptGeneratorRef.current) {
+      const strokeScript = scriptGeneratorRef.current.generateArrayScript(
+        { elements, label: target.identifier },
+        newNode.position
+      );
 
-    await executeStrokeScript(strokeScript);
+      if (executeStrokeScript) {
+        await executeStrokeScript(strokeScript);
+      }
 
-    // Add step
-    stepEngineRef.current.addStep({
-      semanticDelta: { nodesAdded: [newNode] },
-      strokeScript: [strokeScript],
-      description: `Created ${parameters.type} ${target.identifier}`
-    });
+      // Add step
+      if (stepEngineRef.current) {
+        stepEngineRef.current.addStep({
+          semanticDelta: { nodesAdded: [newNode] },
+          strokeScript: [strokeScript],
+          description: `Created ${parameters.type} ${target.identifier}`
+        });
+      }
+    }
 
     setIsDrawing(!isDrawing);
   };
@@ -668,15 +871,15 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
           </button>
         </div>
         <button
-          onClick={toggleVoskListening}
-          disabled={isModelLoading}
+          onClick={toggleSpeechListening}
+          disabled={isModelLoading || !isModelReady}
           style={{
             padding: '8px 12px',
-            background: isListening ? '#FF6B6B' : '#4A90E2',
+            background: isListening ? '#FF6B6B' : (isModelReady ? '#4A90E2' : '#ccc'),
             color: 'white',
             border: 'none',
             borderRadius: '3px',
-            cursor: isModelLoading ? 'not-allowed' : 'pointer',
+            cursor: (isModelLoading || !isModelReady) ? 'not-allowed' : 'pointer',
             fontSize: '12px',
             display: 'flex',
             alignItems: 'center',
