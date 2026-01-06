@@ -765,11 +765,24 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
   const processVoiceCommand = async (command) => {
     if (isProcessing) return;
     
+    const startTime = performance.now();
     setIsProcessing(true);
     setCorrectionMessage(null);
 
     try {
-      const instructions = await understandVoiceCommand(command, sessionContext, aiService);
+      // Process with streaming and caching (optimized for <500ms)
+      const instructions = await understandVoiceCommand(
+        command, 
+        sessionContext, 
+        aiService,
+        (progress) => {
+          // Handle streaming progress for real-time updates
+          if (progress.partial && progress.instructions) {
+            console.log('[DryRunner] Partial instructions received:', progress.instructions);
+            // Could show partial results in UI if needed
+          }
+        }
+      );
       
       if (instructions.correction && instructions.response) {
         setCorrectionMessage(instructions.response);
@@ -786,6 +799,12 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
         } catch (error) {
           console.error('[DryRunner] Failed to save correction:', error);
         }
+      }
+
+      if (!instructions.commands.length) {
+        console.warn('[DryRunner] No commands generated for transcript:', command);
+        setCorrectionMessage('Could not understand the command. Please try again with clearer keywords.');
+        return;
       }
 
       const newNodes = [];
@@ -878,10 +897,40 @@ export const DryRunner = ({ aiService, onClose, itemId, domain }) => {
         recentCommands: [...(ctx.recentCommands || []).slice(-10), command]
       }));
 
+      const endTime = performance.now();
+      const duration = endTime - startTime;
+      
+      // Log to debugger
+        try {
+          const { getVoiceCommandDebugger } = await import('../services/voiceCommandDebugger.js');
+          const commandDebugger = getVoiceCommandDebugger();
+          commandDebugger.logCommand(command, startTime, endTime, { ...instructions, fromCache: false });
+          
+          // Log cache stats periodically
+          if (Math.random() < 0.1) { // 10% of the time
+            const { getVoiceCommandCache } = await import('../services/voiceCommandCache.js');
+            const cache = getVoiceCommandCache();
+            commandDebugger.logCacheStats(cache.getStats());
+          }
+        } catch (debugError) {
+          console.warn('[DryRunner] Debug logging failed:', debugError);
+        }
+
       // Clear transcript after processing (optional - transcript is managed by hook)
       // resetTranscript();
     } catch (error) {
+      const endTime = performance.now();
       console.error('[DryRunner] Error processing command:', error);
+      
+      // Log error to debugger
+      try {
+        const { getVoiceCommandDebugger } = await import('../services/voiceCommandDebugger.js');
+        const commandDebugger = getVoiceCommandDebugger();
+        commandDebugger.logError(command, error, { sessionContext });
+        commandDebugger.logCommand(command, startTime, endTime, null, error);
+      } catch (debugError) {
+        console.error('[DryRunner] Failed to log error:', debugError);
+      }
     } finally {
       setIsProcessing(false);
     }

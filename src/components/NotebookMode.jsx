@@ -103,10 +103,22 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
     onPartialTranscript: async (fullText, newWords) => {
       console.log('[NotebookMode] Partial transcript:', { fullText, newWords });
       if (newWords && aiService) {
-        // Use AI to understand command (like DryRunner)
+        // Use AI to understand command with streaming and caching
         try {
-          const instructions = await understandVoiceCommand(newWords, sessionContext, aiService);
-          console.log('[NotebookMode] AI instructions:', instructions);
+          const startTime = performance.now();
+          const instructions = await understandVoiceCommand(
+            newWords, 
+            sessionContext, 
+            aiService,
+            (progress) => {
+              // Handle streaming progress
+              if (progress.partial && progress.instructions) {
+                console.log('[NotebookMode] Partial instructions:', progress.instructions);
+              }
+            }
+          );
+          const duration = performance.now() - startTime;
+          console.log(`[NotebookMode] AI instructions (${duration.toFixed(2)}ms):`, instructions);
           if (instructions.commands && instructions.commands.length > 0) {
             // Convert AI commands to notebook actions
             for (const cmd of instructions.commands) {
@@ -139,7 +151,20 @@ export default function NotebookMode({ onVoiceCommand, handwritingProfile = {}, 
       console.log('[NotebookMode] Final transcript:', text);
       if (text.trim() && aiService) {
         try {
-          const instructions = await understandVoiceCommand(text, sessionContext, aiService);
+          const startTime = performance.now();
+          const instructions = await understandVoiceCommand(
+            text, 
+            sessionContext, 
+            aiService,
+            (progress) => {
+              // Handle streaming progress
+              if (progress.partial && progress.instructions) {
+                console.log('[NotebookMode] Partial instructions:', progress.instructions);
+              }
+            }
+          );
+          const duration = performance.now() - startTime;
+          console.log(`[NotebookMode] Final instructions (${duration.toFixed(2)}ms):`, instructions);
           if (instructions.commands && instructions.commands.length > 0) {
             for (const cmd of instructions.commands) {
               const parsed = convertAICmdToNotebookAction(cmd);

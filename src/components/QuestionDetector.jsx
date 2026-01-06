@@ -24,6 +24,10 @@ export const QuestionDetector = () => {
   // Detect question when component mounts
   useEffect(() => {
     if (!user || !profile) return;
+    if (typeof chrome === 'undefined' || !chrome?.tabs?.query) {
+      setError('Chrome tabs API not available in this context.');
+      return;
+    }
     
     detectQuestion();
   }, [user, profile]);
@@ -48,6 +52,9 @@ export const QuestionDetector = () => {
     
     try {
       // Get current tab
+      if (!chrome?.tabs?.query) {
+        throw new Error('Chrome tabs API not available');
+      }
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) {
         throw new Error('Could not get current tab');
@@ -431,4 +438,3 @@ const extractPageContent = () => {
     timestamp: new Date().toISOString()
   };
 };
-

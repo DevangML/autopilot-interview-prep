@@ -102,7 +102,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
         console.error('[Content Script] Error extracting content:', error);
         sendResponse({ success: false, error: error.message });
       }
-      return true; // Keep channel open for async response
+      return false; // Synchronous response - no need to keep channel open
     }
     
     return false;

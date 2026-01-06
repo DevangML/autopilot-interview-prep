@@ -20,7 +20,8 @@ class PerformanceLogger {
       memorySnapshots: [],
       renderTimes: [],
       apiCalls: [],
-      componentRenders: []
+      componentRenders: [],
+      voiceCommands: [] // Voice command performance
     };
     this.config = {
       enabled: true,
@@ -599,6 +600,48 @@ class PerformanceLogger {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Log voice command performance
+   */
+  logVoiceCommand(data) {
+    if (!this.config.enabled) return;
+    
+    this.metrics.voiceCommands.push({
+      ...data,
+      timestamp: Date.now(),
+      sessionId: this.sessionId
+    });
+    
+    // Keep only last 1000 voice commands
+    if (this.metrics.voiceCommands.length > 1000) {
+      this.metrics.voiceCommands = this.metrics.voiceCommands.slice(-1000);
+    }
+    
+    // Log slow commands (>500ms)
+    if (data.duration > 500) {
+      console.warn(`[PerformanceLogger] Slow voice command: ${data.duration}ms`, data.command);
+    }
+  }
+
+  /**
+   * Log error with context
+   */
+  logError(data) {
+    if (!this.config.enabled) return;
+    
+    this.metrics.errors = this.metrics.errors || [];
+    this.metrics.errors.push({
+      ...data,
+      timestamp: Date.now(),
+      sessionId: this.sessionId
+    });
+    
+    // Keep only last 500 errors
+    if (this.metrics.errors.length > 500) {
+      this.metrics.errors = this.metrics.errors.slice(-500);
+    }
   }
 }
 

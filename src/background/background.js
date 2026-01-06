@@ -15,14 +15,18 @@ chrome.action.onClicked.addListener((tab) => {
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'EXTRACT_PAGE_CONTENT') {
-    // Forward to content script
+    // Forward to content script - handle async properly
     chrome.tabs.sendMessage(sender.tab.id, { action: 'EXTRACT_PAGE_CONTENT' }, (response) => {
-      sendResponse(response);
+      if (chrome.runtime.lastError) {
+        sendResponse({ success: false, error: chrome.runtime.lastError.message });
+      } else {
+        sendResponse(response || { success: false, error: 'No response from content script' });
+      }
     });
-    return true; // Keep channel open
+    return true; // Keep channel open for async response
   }
   
-  return false;
+  return false; // Synchronous response
 });
 
 // Listen for tab updates to detect page changes
@@ -149,6 +153,7 @@ function captureConsoleLogs() {
 
 // Listen for console log messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle console_log synchronously (no response needed)
   if (message.type === 'console_log' && sender.tab?.id) {
     const tabId = sender.tab.id;
     if (globalThis.browserDebugData && globalThis.browserDebugData.has(tabId)) {
@@ -162,8 +167,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         data.consoleLogs = data.consoleLogs.slice(-1000);
       }
     }
+    // No response needed for console logs
+    return false;
   }
 
+  // Handle get_debug_data synchronously
   if (message.type === 'get_debug_data') {
     const tabId = message.tabId || sender.tab?.id;
     if (tabId && globalThis.browserDebugData) {
@@ -172,9 +180,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else {
       sendResponse({ success: false, error: 'No tab ID provided' });
     }
-    return true;
+    return false; // Synchronous response
   }
 
+  // Handle clear_debug_data synchronously
   if (message.type === 'clear_debug_data') {
     const tabId = message.tabId || sender.tab?.id;
     if (tabId && globalThis.browserDebugData) {
@@ -183,7 +192,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else {
       sendResponse({ success: false, error: 'No tab ID provided' });
     }
-    return true;
+    return false; // Synchronous response
   }
   
   return false;
